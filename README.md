@@ -10,7 +10,7 @@ Electrical stimuli are applied at near-threshold intensity (50% detection rate) 
 Analysis:
 
 01_yc_prepro
--add columns for det and loc task with sdt labels (hit, miss, correct rejection, false alarm)
+-add columns for det and loc task with sdt labels (hit, miss, correct rejection, false alarm)\n
 -filter out trials where on either task no button was pressed or response time was > 5 s or < 0.15 s
 
 02_yc_excl
