@@ -1,0 +1,569 @@
+---
+title: "calculate_loc-sdt-measures"
+author: "Lena Lange"
+date: "2023-04-04"
+output: html_document
+---
+
+Calculate localisation sensitivity d' per block:
+d_prime = qnorm(hit_rate) - qnorm(fa_rate)
+
+Calculate localisation response bias c per block:
+d_prime = (qnorm(hit_rate) + qnorm(fa_rate)) / 2
+
+#### Packages, Settings, Load Data
+
+```{r setup, include=FALSE}
+
+.libPaths("/data/pt_02438/lena/R/") # set path to save packages
+library(tidyverse)
+library(ggpubr)
+
+options(scipen = 999) # turn off e notation
+
+# set paths, load data, edit data frame
+data_dir <- '/data/pt_02438/numbtouch_neglect/young_controls/yc_behav/'
+plot_dir <- '/data/pt_02438/numbtouch_neglect/young_controls/yc_behav/plots/'
+
+behav_data <- paste(data_dir, 'yc_behav_excl.csv', sep = '')
+df <- read.table(behav_data, header = TRUE, sep = ",", fill = TRUE, stringsAsFactors = FALSE) 
+
+# keep only relevant columns & exclude catch trials
+df <- subset(df, select=c(ID, block, block_type, stim, resp1, resp2, det, loca), loca!="catch")
+
+```
+
+#### Calculate Hit Rate, False Alarm Rate, d_prime, c (detection x position)
+
+##### >> All trials (by position)
+
+```{r}
+
+sdt_all <- df %>%
+  mutate(
+    hit_rate = 'NaN',
+    fa_rate = 'NaN',
+    d_prime = 'NaN',
+    c_value = 'NaN',
+    trials = 'NaN',
+    position = 'all'
+  )
+
+sdt_anat <- df %>%
+  mutate(
+    hit_rate = 'NaN',
+    fa_rate = 'NaN',
+    d_prime = 'NaN',
+    c_value = 'NaN',
+    trials = 'NaN',
+    position = 'anat'
+  )
+
+sdt_cross <- df %>%
+  mutate(
+    hit_rate = 'NaN',
+    fa_rate = 'NaN',
+    d_prime = 'NaN',
+    c_value = 'NaN',
+    trials = 'NaN',
+    position = 'cross'
+  )
+
+for (i in unique(df$ID)) {
+  df_ID <- subset(df, ID==i)
+  
+  for (j in unique(df_ID$block)) {
+    df_block <- subset(df_ID, block==j)
+    
+    df_a <- subset(df_block, block_type==1)
+    df_c <- subset(df_block, block_type==2)
+
+    ### overall
+    # count hits, misses, correct rejections, false alarms
+    hits <- sum(df_block$loca=="hit")
+    misses <- sum(df_block$loca=="miss")
+    correct_rejections <- sum(df_block$loca=="CR")
+    false_alarms <- sum(df_block$loca=="FA")
+    
+    # calculate hit rate & false alarm rate with loglinear correction
+    HR = (hits+0.5) / (hits+misses+1)
+    FAR = (false_alarms+0.5) / (false_alarms+correct_rejections+1)
+    
+    sdt_all <- sdt_all %>%
+      mutate(
+        hit_rate = ifelse(((ID==i) & (block==j)), HR, hit_rate), 
+        fa_rate = ifelse(((ID==i) & (block==j)), FAR, fa_rate),
+        
+        d_prime = ifelse(((ID==i) & (block==j)), 
+                         (qnorm(HR) - qnorm(FAR)), 
+                         d_prime),
+        
+        c_value = ifelse(((ID==i) & (block==j)), 
+                         (-0.5*(qnorm(HR) + qnorm(FAR))), 
+                         c_value),
+        
+        trials = ifelse(((ID == i) & (block == j)), 
+                        nrow(df_block), 
+                        trials)
+      )
+    
+    ### anatomical
+    # count hits, misses, correct rejections, false alarms
+    hits <- sum(df_a$loca=="hit")
+    misses <- sum(df_a$loca=="miss")
+    correct_rejections <- sum(df_a$loca=="CR")
+    false_alarms <- sum(df_a$loca=="FA")
+    
+    # calculate hit rate & false alarm rate with loglinear correction
+    HR = (hits+0.5) / (hits+misses+1)
+    FAR = (false_alarms+0.5) / (false_alarms+correct_rejections+1)
+    
+    sdt_anat <- sdt_anat %>%
+      mutate(
+        hit_rate = ifelse(((ID==i) & (block==j)), HR, hit_rate), 
+        fa_rate = ifelse(((ID==i) & (block==j)), FAR, fa_rate),
+        
+        d_prime = ifelse(((ID==i) & (block==j)), 
+                         (qnorm(HR) - qnorm(FAR)), 
+                         d_prime),
+        
+        c_value = ifelse(((ID==i) & (block==j)), 
+                         (-0.5*(qnorm(HR) + qnorm(FAR))), 
+                         c_value),
+        
+        trials = ifelse(((ID == i) & (block == j)), 
+                        nrow(df_a), 
+                        trials)
+      )
+  
+    ### crossed
+    # count hits, misses, correct rejections, false alarms
+    hits <- sum(df_c$loca=="hit")
+    misses <- sum(df_c$loca=="miss")
+    correct_rejections <- sum(df_c$loca=="CR")
+    false_alarms <- sum(df_c$loca=="FA")
+    
+    # calculate hit rate & false alarm rate with loglinear correction
+    HR = (hits+0.5) / (hits+misses+1)
+    FAR = (false_alarms+0.5) / (false_alarms+correct_rejections+1)
+    
+    sdt_cross <- sdt_cross %>%
+      mutate(
+        hit_rate = ifelse(((ID==i) & (block==j)), HR, hit_rate), 
+        fa_rate = ifelse(((ID==i) & (block==j)), FAR, fa_rate),
+        
+        d_prime = ifelse(((ID==i) & (block==j)), 
+                         (qnorm(HR) - qnorm(FAR)), 
+                         d_prime),
+        
+        c_value = ifelse(((ID==i) & (block==j)), 
+                         (-0.5*(qnorm(HR) + qnorm(FAR))), 
+                         c_value),
+        
+        trials = ifelse(((ID == i) & (block == j)), 
+                        nrow(df_c), 
+                        trials)
+      )
+  }
+}
+
+df_all <- rbind(sdt_all, sdt_anat, sdt_cross) %>%
+  mutate(
+    d_prime = as.numeric(d_prime),
+    c_value = as.numeric(c_value),
+    trials = as.numeric(trials))
+
+df_all_sum <- df_all %>%
+  group_by(ID, block, position, d_prime, c_value, trials) %>%
+  summarise() %>%
+  mutate(detection="all")
+
+df_all_av <- df_all_sum %>%
+  group_by(ID, position) %>%
+  summarise(d_prime = mean(d_prime),
+            c_value = mean(c_value),
+            trials = sum(trials)) %>%
+  mutate(detection="all") 
+  
+```
+
+##### >> Detected only (by position)
+
+```{r}
+df_det <- subset(df, det!="missF1" & det!="missF2")
+
+sdt_all <- df %>%
+  mutate(
+    hit_rate = 'NaN',
+    fa_rate = 'NaN',
+    d_prime = 'NaN',
+    c_value = 'NaN',
+    trials = 'NaN',
+    position = 'all'
+  )
+
+sdt_anat <- df %>%
+  mutate(
+    hit_rate = 'NaN',
+    fa_rate = 'NaN',
+    d_prime = 'NaN',
+    c_value = 'NaN',
+    trials = 'NaN',
+    position = 'anat'
+  )
+
+sdt_cross <- df %>%
+  mutate(
+    hit_rate = 'NaN',
+    fa_rate = 'NaN',
+    d_prime = 'NaN',
+    c_value = 'NaN',
+    trials = 'NaN',
+    position = 'cross'
+  )
+
+for (i in unique(df_det$ID)) {
+  df_ID <- subset(df_det, ID==i)
+  
+  for (j in unique(df_ID$block)) {
+    df_block <- subset(df_ID, block==j)
+    
+    df_a <- subset(df_block, block_type==1)
+    df_c <- subset(df_block, block_type==2)
+
+    ### overall
+    # count hits, misses, correct rejections, false alarms
+    hits <- sum(df_block$loca=="hit")
+    misses <- sum(df_block$loca=="miss")
+    correct_rejections <- sum(df_block$loca=="CR")
+    false_alarms <- sum(df_block$loca=="FA")
+    
+    # calculate hit rate & false alarm rate with loglinear correction
+    HR = (hits+0.5) / (hits+misses+1)
+    FAR = (false_alarms+0.5) / (false_alarms+correct_rejections+1)
+    
+    sdt_all <- sdt_all %>%
+      mutate(
+        hit_rate = ifelse(((ID==i) & (block==j)), HR, hit_rate), 
+        fa_rate = ifelse(((ID==i) & (block==j)), FAR, fa_rate),
+        
+        d_prime = ifelse(((ID==i) & (block==j)), 
+                         (qnorm(HR) - qnorm(FAR)), 
+                         d_prime),
+        
+        c_value = ifelse(((ID==i) & (block==j)), 
+                         (-0.5*(qnorm(HR) + qnorm(FAR))), 
+                         c_value),
+        
+        trials = ifelse(((ID == i) & (block == j)), 
+                        nrow(df_block), 
+                        trials)
+      )
+    
+    ### anatomical
+    # count hits, misses, correct rejections, false alarms
+    hits <- sum(df_a$loca=="hit")
+    misses <- sum(df_a$loca=="miss")
+    correct_rejections <- sum(df_a$loca=="CR")
+    false_alarms <- sum(df_a$loca=="FA")
+    
+    # calculate hit rate & false alarm rate with loglinear correction
+    HR = (hits+0.5) / (hits+misses+1)
+    FAR = (false_alarms+0.5) / (false_alarms+correct_rejections+1)
+    
+    sdt_anat <- sdt_anat %>%
+      mutate(
+        hit_rate = ifelse(((ID==i) & (block==j)), HR, hit_rate), 
+        fa_rate = ifelse(((ID==i) & (block==j)), FAR, fa_rate),
+        
+        d_prime = ifelse(((ID==i) & (block==j)), 
+                         (qnorm(HR) - qnorm(FAR)), 
+                         d_prime),
+        
+        c_value = ifelse(((ID==i) & (block==j)), 
+                         (-0.5*(qnorm(HR) + qnorm(FAR))), 
+                         c_value),
+        
+        trials = ifelse(((ID == i) & (block == j)), 
+                        nrow(df_a), 
+                        trials)
+      )
+  
+    ### crossed
+    # count hits, misses, correct rejections, false alarms
+    hits <- sum(df_c$loca=="hit")
+    misses <- sum(df_c$loca=="miss")
+    correct_rejections <- sum(df_c$loca=="CR")
+    false_alarms <- sum(df_c$loca=="FA")
+    
+    # calculate hit rate & false alarm rate with loglinear correction
+    HR = (hits+0.5) / (hits+misses+1)
+    FAR = (false_alarms+0.5) / (false_alarms+correct_rejections+1)
+    
+    sdt_cross <- sdt_cross %>%
+      mutate(
+        hit_rate = ifelse(((ID==i) & (block==j)), HR, hit_rate), 
+        fa_rate = ifelse(((ID==i) & (block==j)), FAR, fa_rate),
+        
+        d_prime = ifelse(((ID==i) & (block==j)), 
+                         (qnorm(HR) - qnorm(FAR)), 
+                         d_prime),
+        
+        c_value = ifelse(((ID==i) & (block==j)), 
+                         (-0.5*(qnorm(HR) + qnorm(FAR))), 
+                         c_value),
+        
+        trials = ifelse(((ID == i) & (block == j)), 
+                        nrow(df_c), 
+                        trials)
+      )
+  }
+}
+
+df_det <- rbind(sdt_all, sdt_anat, sdt_cross) %>%
+  mutate(
+    d_prime = as.numeric(d_prime),
+    c_value = as.numeric(c_value),
+    trials = as.numeric(trials))
+
+df_det_sum <- df_det %>%
+  group_by(ID, block, position, d_prime, c_value, trials) %>%
+  summarise() %>%
+  mutate(detection="det")
+
+df_det_av <- df_det_sum %>%
+  group_by(ID, position) %>%
+  summarise(d_prime = mean(d_prime),
+            c_value = mean(c_value),
+            trials = sum(trials)) %>%
+  mutate(detection="det") 
+  
+```
+
+##### >> Undetected only (by position)
+
+```{r}
+df_undet <- subset(df, det!="hitF1" & det!="hitF2")
+
+sdt_all <- df %>%
+  mutate(
+    hit_rate = 'NaN',
+    fa_rate = 'NaN',
+    d_prime = 'NaN',
+    c_value = 'NaN',
+    trials = 'NaN',
+    position = 'all'
+  )
+
+sdt_anat <- df %>%
+  mutate(
+    hit_rate = 'NaN',
+    fa_rate = 'NaN',
+    d_prime = 'NaN',
+    c_value = 'NaN',
+    trials = 'NaN',
+    position = 'anat'
+  )
+
+sdt_cross <- df %>%
+  mutate(
+    hit_rate = 'NaN',
+    fa_rate = 'NaN',
+    d_prime = 'NaN',
+    c_value = 'NaN',
+    trials = 'NaN',
+    position = 'cross'
+  )
+
+for (i in unique(df_undet$ID)) {
+  df_ID <- subset(df_undet, ID==i)
+  
+  for (j in unique(df_ID$block)) {
+    df_block <- subset(df_ID, block==j)
+    
+    df_a <- subset(df_block, block_type==1)
+    df_c <- subset(df_block, block_type==2)
+
+    ### overall
+    # count hits, misses, correct rejections, false alarms
+    hits <- sum(df_block$loca=="hit")
+    misses <- sum(df_block$loca=="miss")
+    correct_rejections <- sum(df_block$loca=="CR")
+    false_alarms <- sum(df_block$loca=="FA")
+    
+    # calculate hit rate & false alarm rate with loglinear correction
+    HR = (hits+0.5) / (hits+misses+1)
+    FAR = (false_alarms+0.5) / (false_alarms+correct_rejections+1)
+    
+    sdt_all <- sdt_all %>%
+      mutate(
+        hit_rate = ifelse(((ID==i) & (block==j)), HR, hit_rate), 
+        fa_rate = ifelse(((ID==i) & (block==j)), FAR, fa_rate),
+        
+        d_prime = ifelse(((ID==i) & (block==j)), 
+                         (qnorm(HR) - qnorm(FAR)), 
+                         d_prime),
+        
+        c_value = ifelse(((ID==i) & (block==j)), 
+                         (-0.5*(qnorm(HR) + qnorm(FAR))), 
+                         c_value),
+        
+        trials = ifelse(((ID == i) & (block == j)), 
+                        nrow(df_block), 
+                        trials)
+      )
+    
+    ### anatomical
+    # count hits, misses, correct rejections, false alarms
+    hits <- sum(df_a$loca=="hit")
+    misses <- sum(df_a$loca=="miss")
+    correct_rejections <- sum(df_a$loca=="CR")
+    false_alarms <- sum(df_a$loca=="FA")
+    
+    # calculate hit rate & false alarm rate with loglinear correction
+    HR = (hits+0.5) / (hits+misses+1)
+    FAR = (false_alarms+0.5) / (false_alarms+correct_rejections+1)
+    
+    sdt_anat <- sdt_anat %>%
+      mutate(
+        hit_rate = ifelse(((ID==i) & (block==j)), HR, hit_rate), 
+        fa_rate = ifelse(((ID==i) & (block==j)), FAR, fa_rate),
+        
+        d_prime = ifelse(((ID==i) & (block==j)), 
+                         (qnorm(HR) - qnorm(FAR)), 
+                         d_prime),
+        
+        c_value = ifelse(((ID==i) & (block==j)), 
+                         (-0.5*(qnorm(HR) + qnorm(FAR))), 
+                         c_value),
+        
+        trials = ifelse(((ID == i) & (block == j)), 
+                        nrow(df_a), 
+                        trials)
+      )
+  
+    ### crossed
+    # count hits, misses, correct rejections, false alarms
+    hits <- sum(df_c$loca=="hit")
+    misses <- sum(df_c$loca=="miss")
+    correct_rejections <- sum(df_c$loca=="CR")
+    false_alarms <- sum(df_c$loca=="FA")
+    
+    # calculate hit rate & false alarm rate with loglinear correction
+    HR = (hits+0.5) / (hits+misses+1)
+    FAR = (false_alarms+0.5) / (false_alarms+correct_rejections+1)
+    
+    sdt_cross <- sdt_cross %>%
+      mutate(
+        hit_rate = ifelse(((ID==i) & (block==j)), HR, hit_rate), 
+        fa_rate = ifelse(((ID==i) & (block==j)), FAR, fa_rate),
+        
+        d_prime = ifelse(((ID==i) & (block==j)), 
+                         (qnorm(HR) - qnorm(FAR)), 
+                         d_prime),
+        
+        c_value = ifelse(((ID==i) & (block==j)), 
+                         (-0.5*(qnorm(HR) + qnorm(FAR))), 
+                         c_value),
+        
+        trials = ifelse(((ID == i) & (block == j)), 
+                        nrow(df_c), 
+                        trials)
+      )
+  }
+}
+
+df_undet <- rbind(sdt_all, sdt_anat, sdt_cross) %>%
+  mutate(
+    d_prime = as.numeric(d_prime),
+    c_value = as.numeric(c_value),
+    trials = as.numeric(trials))
+
+df_undet_sum <- df_undet %>%
+  group_by(ID, block, position, d_prime, c_value, trials) %>%
+  summarise() %>%
+  mutate(detection="undet")
+
+df_undet_av <- df_undet_sum %>%
+  group_by(ID, position) %>%
+  summarise(d_prime = mean(d_prime),
+            c_value = mean(c_value),
+            trials = sum(trials)) %>%
+  mutate(detection="undet") 
+
+```
+
+
+#### Bind together & save data frames
+
+```{r}
+df_sum <- rbind(df_all_sum, df_det_sum, df_undet_sum) %>%
+  select(ID, block, detection, position, d_prime, c_value)
+fname <- file.path(data_dir, "yc_sdt-2afc_sum.csv")
+write.csv(df_sum, fname, row.names = FALSE)
+
+df_av <- rbind(df_all_av, df_det_av, df_undet_av) %>%
+  select(ID, detection, position, d_prime, c_value)
+fname <- file.path(data_dir, "yc_sdt-2afc_av.csv")
+write.csv(df_av, fname, row.names = FALSE)
+  
+```
+
+#### (SDT function)
+
+```{r}
+library(dplyr)
+
+# Rename 'block_type' to 'position' and change values
+df_new <- df %>%
+  mutate(position = ifelse(block_type == 1, 'anat', 'cross')) %>%
+  select(-block_type)  # Remove the original 'block_type' column
+
+# Define a function for SDT calculations
+calculate_sdt <- function(df, detection) {
+  df %>%
+    group_by(ID, block, position) %>%
+    summarise(
+      hit_rate = (sum(loca == "hit") + 0.5) / (sum(loca == "hit") + sum(loca == "miss") + 1),
+      fa_rate = (sum(loca == "FA") + 0.5) / (sum(loca == "FA") + sum(loca == "CR") + 1),
+      d_prime = qnorm(hit_rate) - qnorm(fa_rate),
+      c_value = -0.5 * (qnorm(hit_rate) + qnorm(fa_rate)),
+      trials = n()
+    ) %>%
+    mutate(detection = detection)
+}
+
+# Detected only
+df_det <- df_new %>%
+  filter(det != "missF1" & det != "missF2")
+
+sdt_det <- calculate_sdt(df_det, "det")
+
+# Undetected only
+df_undet <- df_new %>%
+  filter(det != "hitF1" & det != "hitF2")
+
+sdt_undet <- calculate_sdt(df_undet, "undet")
+
+# Combined
+sdt_combined <- calculate_sdt(df_new, "all")
+
+# Combine the results
+df_result <- bind_rows(sdt_det, sdt_undet, sdt_combined)
+
+# Calculate overall SDT without grouping by position
+df_overall <- df_result %>%
+  group_by(ID, detection) %>%
+  summarise(
+    hit_rate = mean(hit_rate),
+    fa_rate = mean(fa_rate),
+    d_prime = mean(d_prime),
+    c_value = mean(c_value),
+    trials = sum(trials),
+    position = "all"
+  )
+
+# Combine the overall SDT with the previous results
+df_final <- bind_rows(df_result, df_overall)
+
+```

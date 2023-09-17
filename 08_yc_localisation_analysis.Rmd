@@ -1,0 +1,703 @@
+---
+title: "localisation_analysis"
+author: "Lena Lange"
+date: "2023-09-12"
+output: html_document
+---
+
+#### Packages, settings & data frames
+
+```{r setup, include=FALSE}
+
+.libPaths("/data/pt_02438/lena/R/") # set path to save packages
+library(tidyverse)
+library(ggpubr)
+library(rstatix) # identify_outliers(), ANOVA
+library(car) # levene test
+library(WRS2) # robust anova (Wilcox)
+library(lme4) # GLMM
+
+options(scipen = 999) # turn off e notation
+
+# set paths & load data
+data_dir <- '/data/pt_02438/numbtouch_neglect/young_controls/yc_behav/'
+code_dir <- '/data/pt_02438/numbtouch_neglect/young_controls/yc_behav/R/'
+plot_dir <- '/data/pt_02438/numbtouch_neglect/young_controls/yc_behav/plots/'
+
+
+# load data frames for localisation performance (from yc_perf_loc.Rmd)
+fname <- file.path(data_dir, "yc_locperf_av.csv")
+df_loc_av <- read.table(fname, header = TRUE, sep = ",", fill = TRUE, stringsAsFactors = FALSE)
+df_loc_av <- subset(df_loc_av, finger=="both")
+
+fname <- file.path(data_dir, "yc_locperf_sum.csv")
+df_loc_sum <- read.table(fname, header = TRUE, sep = ",", fill = TRUE, stringsAsFactors = FALSE) 
+df_loc_sum <- subset(df_loc_sum, finger=="both")
+
+
+# load data frames for localisation sdt measures (from yc_sdt-2afc.Rmd)
+fname <- file.path(data_dir, "yc_sdt-2afc_av.csv")
+sdt_av <- read.table(fname, header = TRUE, sep = ",", fill = TRUE, stringsAsFactors = FALSE) 
+
+fname <- file.path(data_dir, "yc_sdt-2afc_sum.csv")
+sdt_sum <- read.table(fname, header = TRUE, sep = ",", fill = TRUE, stringsAsFactors = FALSE) 
+
+```
+
+### Plot F1 + F2 Localisation performance by detection x hand position
+
+```{r}
+palette <- c("#F8766D", "#0072C1", "#EFC000")
+
+# within-subject averages  
+av_loc <- ggplot(df_loc_av, aes(x=detection, y=performance*100, fill=position))+
+  geom_boxplot(show.legend = FALSE)+
+  labs(title="", x ="", y = "performance (%)")+
+  scale_x_discrete(breaks=c("all", "det", "undet"),
+                   labels=c("all trials", "detected\nonly", "undetected\nonly"))+
+  scale_fill_manual(values=palette)+
+  theme_linedraw()+
+  theme(axis.text.x=element_text(size=12, angle=45, hjust=1))+
+  ylim(0,100)
+
+# across-all-blocks averages  
+sum_loc <- ggplot(df_loc_sum, aes(x=detection, y=performance*100, fill=position))+
+  geom_boxplot(show.legend = FALSE)+
+  labs(title="", x ="", y = "performance (%)")+
+  scale_x_discrete(breaks=c("all", "det", "undet"),
+                   labels=c("all trials", "detected\nonly", "undetected\nonly"))+
+  scale_fill_manual(values=palette)+
+  theme_linedraw()+
+  theme(axis.text.x=element_text(size=12, angle=45, hjust=1))+
+  ylim(0,100)
+
+fig <- ggarrange(av_loc, sum_loc, 
+                 labels = c("A", "B"),
+                 common.legend = TRUE, legend = "top",
+                 ncol = 2, nrow = 1)
+
+annotate_figure(fig,
+                top = text_grob("Localisation performance by detection and hand position", size = 14))
+
+# compare overall means of loc_perf & d' between detected/undetected:
+diff_perf <- with(subset(df_loc_av, position=="all" & detection!="all"), 
+                 performance[detection=="det"] - performance[detection=="undet"])
+shapiro.test(diff_perf)
+t.test(performance ~ detection,
+       data=subset(df_loc_av, position=="all" & detection!="all"),
+       paired = TRUE, alternative = "two.sided")
+
+diff_d <- with(subset(sdt_av, position=="all"), 
+                 d_prime[detection=="det"] - d_prime[detection=="undet"])
+shapiro.test(diff_perf)
+t.test(d_prime ~ detection,
+       data=subset(sdt_av, position=="all" & detection!="all"),
+       paired = TRUE, alternative = "two.sided")
+
+```
+
+##### Compare means of performance between positions (within-subject averaged data)
+
+```{r}
+# identify outliers (by 1.5*IQR rule) in detected trials:
+outliers <- subset(df_loc_av, detection=="det") %>%
+  group_by(position) %>%
+  identify_outliers(performance) 
+# >>> ID5/cross
+
+# filter outliers (and corresponding data point in anatomical position)
+stat_det <- subset(df_loc_av, detection=="det" & position!="all") %>%
+  filter(!ID==5)
+
+
+# identify outliers (by 1.5*IQR rule) in undetected trials:
+outliers <- subset(df_loc_av, detection=="undet") %>%
+  group_by(position) %>%
+  identify_outliers(performance) 
+# >>> ID22/anat
+
+# filter outliers (and corresponding data point in anatomical position)
+stat_undet <- subset(df_loc_av, detection=="undet" & position!="all") %>%
+  filter(!ID==22)
+
+
+# check distribution of differences for detected and undetected trials:
+diff_det <- with(stat_det, 
+                 performance[position=="anat"] - performance[position=="cross"])
+shapiro.test(diff_det)
+
+diff_undet <- with(stat_undet, 
+                   performance[position=="anat"] - performance[position=="cross"])
+shapiro.test(diff_undet)
+
+# compare means:
+res.det <- t.test(performance ~ position, 
+            data=stat_det, 
+            paired = TRUE, 
+            alternative = "two.sided")
+
+res.undet <- t.test(performance ~ position, 
+       data=stat_undet, 
+       paired = TRUE, 
+       alternative = "two.sided")
+
+cat("t-test detected trials (av, filtered; n=38):\n")
+cat("Estimated mean difference:", res.det$estimate, "\n")
+cat("p-value:", res.det$p.value, "\n\n")
+
+cat("t-test undetected trials (av, filtered; n=38):\n")
+cat("Estimated mean difference:", res.undet$estimate, "\n")
+cat("p-value:", res.undet$p.value, "\n\n")
+```
+
+##### Compare means of performance between positions (pooled data)
+
+```{r}
+# filter outliers in detected trials by 1.5 * QR rule
+det_filt <- subset(df_loc_sum, detection=="det" & position!="all") %>%
+  group_by(position) %>%
+  mutate(q1 = quantile(performance, 0.25),
+         q3 = quantile(performance, 0.75),
+         iqr = q3 - q1,
+         lower_limit = q1 - 1.5 * iqr,
+         upper_limit = q3 + 1.5 * iqr) %>%
+  filter(performance >= lower_limit & performance <= upper_limit)
+
+# throw out blocks where values were excluded in one of the position groups
+stat_det <- det_filt %>%
+  group_by(ID, block) %>%
+  filter(all(c("anat", "cross") %in% position))
+
+
+# filter outliers in undetected trials by 1.5 * QR rule
+undet_filt <- subset(df_loc_sum, detection=="undet" & position!="all") %>%
+  group_by(position) %>%
+  mutate(q1 = quantile(performance, 0.25),
+         q3 = quantile(performance, 0.75),
+         iqr = q3 - q1,
+         lower_limit = q1 - 1.5 * iqr,
+         upper_limit = q3 + 1.5 * iqr) %>%
+  filter(performance >= lower_limit & performance <= upper_limit)
+
+# find value pairs left after outlier exclusion
+stat_undet <- undet_filt %>%
+  group_by(ID, block) %>%
+  filter(all(c("anat", "cross") %in% position))
+
+
+# check distribution of differences for detected and undetected trials:
+diff_det <- with(stat_det, 
+                 performance[position=="anat"] - performance[position=="cross"])
+shapiro.test(diff_det)
+
+diff_undet <- with(stat_undet, 
+                   performance[position=="anat"] - performance[position=="cross"])
+shapiro.test(diff_undet)
+
+# compare means:
+res.det <- wilcox.test(performance ~ position, 
+            data=stat_det, 
+            paired = TRUE, 
+            alternative = "two.sided")
+
+res.undet <- t.test(performance ~ position, 
+       data=stat_undet, 
+       paired = TRUE, 
+       alternative = "two.sided")
+
+cat("wilcox test detected trials (sum, filtered; n=138):\n")
+cat("Estimated mean difference:", res.det$estimate, "\n")
+cat("p-value:", res.det$p.value, "\n\n")
+
+cat("t-test undetected trials (sum, filtered; n=145):\n")
+cat("Estimated mean difference:", res.undet$estimate, "\n")
+cat("p-value:", res.undet$p.value, "\n\n")
+
+# plot detected trials without outliers:
+ggplot(stat_det, aes(x=position, y=performance*100))+
+  geom_boxplot(show.legend = FALSE, outlier.shape = NA)
+```
+
+
+### Plot F1 + F2 Localisation sensitivity d' by detection x hand position
+
+```{r}
+palette <- c("#F8766D", "#0072C1", "#EFC000")
+
+# within-subject averages  
+av_loc <- ggplot(sdt_av, aes(x=detection, y=d_prime, fill=position))+
+  geom_boxplot(show.legend = FALSE)+
+  labs(title="", x ="", y = "d'")+
+  scale_x_discrete(breaks=c("all", "det", "undet"),
+                   labels=c("all trials", "detected\nonly", "undetected\nonly"))+
+  scale_fill_manual(values=palette)+
+  theme_linedraw()+
+  theme(axis.text.x=element_text(size=12, angle=45, hjust=1))+
+  ylim(-2, 4.5)
+
+# across-all-blocks averages  
+sum_loc <- ggplot(sdt_sum, aes(x=detection, y=d_prime, fill=position))+
+  geom_boxplot(show.legend = FALSE)+
+  labs(title="", x ="", y = "d'")+
+  scale_x_discrete(breaks=c("all", "det", "undet"),
+                   labels=c("all trials", "detected\nonly", "undetected\nonly"))+
+  scale_fill_manual(values=palette)+
+  theme_linedraw()+
+  theme(axis.text.x=element_text(size=12, angle=45, hjust=1))+
+  ylim(-2, 4.5)
+
+fig <- ggarrange(av_loc, sum_loc, 
+                 labels = c("C", "D"),
+                 common.legend = TRUE, legend = "top",
+                 ncol = 2, nrow = 1)
+
+annotate_figure(fig,
+                top = text_grob("Localisation sensitivity (d') by detection and hand position", size = 14))
+
+```
+
+##### Compare means of sensitivity between positions (within-subject averaged data)
+
+```{r}
+# filter outliers in detected trials by 1.5 * QR rule
+det_filt <- subset(sdt_av, detection=="det" & position!="all") %>%
+  group_by(position) %>%
+  mutate(q1 = quantile(d_prime, 0.25),
+         q3 = quantile(d_prime, 0.75),
+         iqr = q3 - q1,
+         lower_limit = q1 - 1.5 * iqr,
+         upper_limit = q3 + 1.5 * iqr) %>%
+  filter(d_prime >= lower_limit & d_prime <= upper_limit)
+
+# throw out blocks where values were excluded in one of the position groups
+stat_det <- det_filt %>%
+  group_by(ID) %>%
+  filter(all(c("anat", "cross") %in% position))
+
+
+# filter outliers in undetected trials by 1.5 * QR rule
+undet_filt <- subset(sdt_av, detection=="undet" & position!="all") %>%
+  group_by(position) %>%
+  mutate(q1 = quantile(d_prime, 0.25),
+         q3 = quantile(d_prime, 0.75),
+         iqr = q3 - q1,
+         lower_limit = q1 - 1.5 * iqr,
+         upper_limit = q3 + 1.5 * iqr) %>%
+  filter(d_prime >= lower_limit & d_prime <= upper_limit)
+
+# find value pairs left after outlier exclusion
+stat_undet <- undet_filt %>%
+  group_by(ID) %>%
+  filter(all(c("anat", "cross") %in% position))
+
+
+# check distribution of differences for detected and undetected trials:
+diff_det <- with(stat_det, 
+                 d_prime[position=="anat"] - d_prime[position=="cross"])
+shapiro.test(diff_det)
+
+diff_undet <- with(stat_undet, 
+                   d_prime[position=="anat"] - d_prime[position=="cross"])
+shapiro.test(diff_undet)
+
+# compare means:
+res.det <- t.test(d_prime ~ position, 
+            data=stat_det, 
+            paired = TRUE, 
+            alternative = "two.sided")
+
+res.undet <- t.test(d_prime ~ position, 
+       data=stat_undet, 
+       paired = TRUE, 
+       alternative = "two.sided")
+
+cat("t test detected trials (av, filtered; n=39):\n")
+cat("Estimated mean difference:", res.det$estimate, "\n")
+cat("p-value:", res.det$p.value, "\n\n")
+
+cat("t-test undetected trials (av, filtered; n=37):\n")
+cat("Estimated mean difference:", res.undet$estimate, "\n")
+cat("p-value:", res.undet$p.value, "\n\n")
+
+```
+
+##### Compare means of sensitivity between positions (pooled data)
+
+```{r}
+# filter outliers in detected trials by 1.5 * QR rule
+det_filt <- subset(sdt_sum, detection=="det" & position!="all") %>%
+  group_by(position) %>%
+  mutate(q1 = quantile(d_prime, 0.25),
+         q3 = quantile(d_prime, 0.75),
+         iqr = q3 - q1,
+         lower_limit = q1 - 1.5 * iqr,
+         upper_limit = q3 + 1.5 * iqr) %>%
+  filter(d_prime >= lower_limit & d_prime <= upper_limit)
+
+# throw out blocks where values were excluded in one of the position groups
+stat_det <- det_filt %>%
+  group_by(ID, block) %>%
+  filter(all(c("anat", "cross") %in% position))
+
+
+# filter outliers in undetected trials by 1.5 * QR rule
+undet_filt <- subset(sdt_sum, detection=="undet" & position!="all") %>%
+  group_by(position) %>%
+  mutate(q1 = quantile(d_prime, 0.25),
+         q3 = quantile(d_prime, 0.75),
+         iqr = q3 - q1,
+         lower_limit = q1 - 1.5 * iqr,
+         upper_limit = q3 + 1.5 * iqr) %>%
+  filter(d_prime >= lower_limit & d_prime <= upper_limit)
+
+# find value pairs left after outlier exclusion
+stat_undet <- undet_filt %>%
+  group_by(ID, block) %>%
+  filter(all(c("anat", "cross") %in% position))
+
+
+# check distribution of differences for detected and undetected trials:
+diff_det <- with(stat_det, 
+                 d_prime[position=="anat"] - d_prime[position=="cross"])
+shapiro.test(diff_det)
+
+diff_undet <- with(stat_undet, 
+                   d_prime[position=="anat"] - d_prime[position=="cross"])
+shapiro.test(diff_undet)
+
+# compare means:
+res.det <- wilcox.test(d_prime ~ position, 
+            data=stat_det, 
+            paired = TRUE, 
+            alternative = "two.sided")
+
+res.undet <- t.test(d_prime ~ position, 
+       data=stat_undet, 
+       paired = TRUE, 
+       alternative = "two.sided")
+
+cat("wilcox test detected trials (sum, filtered; n=147):\n")
+cat("Estimated mean difference:", res.det$estimate, "\n")
+cat("p-value:", res.det$p.value, "\n\n")
+
+cat("t-test undetected trials (sum, filtered; n=143):\n")
+cat("Estimated mean difference:", res.undet$estimate, "\n")
+cat("p-value:", res.undet$p.value, "\n\n")
+
+```
+
+### Plot F1 + F2 Localisation response bias c by detection x hand position
+
+```{r}
+palette <- c("#F8766D", "#0072C1", "#EFC000")
+
+# within-subject averages  
+av_loc <- ggplot(sdt_av, aes(x=detection, y=c_value, fill=position))+
+  geom_boxplot(show.legend = FALSE)+
+  labs(title="", x ="", y = "c")+
+  scale_x_discrete(breaks=c("all", "det", "undet"),
+                   labels=c("all trials", "detected\nonly", "undetected\nonly"))+
+  scale_fill_manual(values=palette)+
+  theme_linedraw()+
+  theme(axis.text.x=element_text(size=12, angle=45, hjust=1))+
+  ylim(-1.5, 1.5)
+
+# across-all-blocks averages  
+sum_loc <- ggplot(sdt_sum, aes(x=detection, y=c_value, fill=position))+
+  geom_boxplot(show.legend = FALSE)+
+  labs(title="", x ="", y = "c")+
+  scale_x_discrete(breaks=c("all", "det", "undet"),
+                   labels=c("all trials", "detected\nonly", "undetected\nonly"))+
+  scale_fill_manual(values=palette)+
+  theme_linedraw()+
+  theme(axis.text.x=element_text(size=12, angle=45, hjust=1))+
+  ylim(-1.5, 1.5)
+
+fig <- ggarrange(av_loc, sum_loc, 
+                 labels = c("E", "F"),
+                 common.legend = TRUE, legend = "top",
+                 ncol = 2, nrow = 1)
+
+annotate_figure(fig,
+                top = text_grob("Localisation response bias (c) by detection and hand position", size = 14))
+
+```
+ 
+##### Compare means of response bias between positions (within-subject averaged data)
+
+```{r}
+# filter outliers in detected trials by 1.5 * QR rule
+det_filt <- subset(sdt_av, detection=="det" & position!="all") %>%
+  group_by(position) %>%
+  mutate(q1 = quantile(c_value, 0.25),
+         q3 = quantile(c_value, 0.75),
+         iqr = q3 - q1,
+         lower_limit = q1 - 1.5 * iqr,
+         upper_limit = q3 + 1.5 * iqr) %>%
+  filter(c_value >= lower_limit & c_value <= upper_limit)
+
+# throw out blocks where values were excluded in one of the position groups
+stat_det <- det_filt %>%
+  group_by(ID) %>%
+  filter(all(c("anat", "cross") %in% position))
+
+
+# filter outliers in undetected trials by 1.5 * QR rule
+undet_filt <- subset(sdt_av, detection=="undet" & position!="all") %>%
+  group_by(position) %>%
+  mutate(q1 = quantile(c_value, 0.25),
+         q3 = quantile(c_value, 0.75),
+         iqr = q3 - q1,
+         lower_limit = q1 - 1.5 * iqr,
+         upper_limit = q3 + 1.5 * iqr) %>%
+  filter(c_value >= lower_limit & c_value <= upper_limit)
+
+# find value pairs left after outlier exclusion
+stat_undet <- undet_filt %>%
+  group_by(ID) %>%
+  filter(all(c("anat", "cross") %in% position))
+
+
+# check distribution of differences for detected and undetected trials:
+diff_det <- with(stat_det, 
+                 c_value[position=="anat"] - c_value[position=="cross"])
+shapiro.test(diff_det)
+
+diff_undet <- with(stat_undet, 
+                   c_value[position=="anat"] - c_value[position=="cross"])
+shapiro.test(diff_undet)
+
+# compare means:
+res.det <- t.test(c_value ~ position, 
+            data=stat_det, 
+            paired = TRUE, 
+            alternative = "two.sided")
+
+res.undet <- wilcox.test(c_value ~ position, 
+       data=stat_undet, 
+       paired = TRUE, 
+       alternative = "two.sided")
+
+cat("t test detected trials (av, filtered; n=39):\n")
+cat("Estimated mean difference:", res.det$estimate, "\n")
+cat("p-value:", res.det$p.value, "\n\n")
+
+cat("wilcox test undetected trials (av, filtered; n=35):\n")
+cat("p-value:", res.undet$p.value, "\n\n")
+
+```
+
+##### Compare means of sensitivity between positions (pooled data)
+
+```{r}
+# filter outliers in detected trials by 1.5 * QR rule
+det_filt <- subset(sdt_sum, detection=="det" & position!="all") %>%
+  group_by(position) %>%
+  mutate(q1 = quantile(c_value, 0.25),
+         q3 = quantile(c_value, 0.75),
+         iqr = q3 - q1,
+         lower_limit = q1 - 1.5 * iqr,
+         upper_limit = q3 + 1.5 * iqr) %>%
+  filter(c_value >= lower_limit & c_value <= upper_limit)
+
+# throw out blocks where values were excluded in one of the position groups
+stat_det <- det_filt %>%
+  group_by(ID, block) %>%
+  filter(all(c("anat", "cross") %in% position))
+
+
+# filter outliers in undetected trials by 1.5 * QR rule
+undet_filt <- subset(sdt_sum, detection=="undet" & position!="all") %>%
+  group_by(position) %>%
+  mutate(q1 = quantile(c_value, 0.25),
+         q3 = quantile(c_value, 0.75),
+         iqr = q3 - q1,
+         lower_limit = q1 - 1.5 * iqr,
+         upper_limit = q3 + 1.5 * iqr) %>%
+  filter(c_value >= lower_limit & c_value <= upper_limit)
+
+# find value pairs left after outlier exclusion
+stat_undet <- undet_filt %>%
+  group_by(ID, block) %>%
+  filter(all(c("anat", "cross") %in% position))
+
+
+# check distribution of differences for detected and undetected trials:
+diff_det <- with(stat_det, 
+                 c_value[position=="anat"] - c_value[position=="cross"])
+shapiro.test(diff_det)
+
+diff_undet <- with(stat_undet, 
+                   c_value[position=="anat"] - c_value[position=="cross"])
+shapiro.test(diff_undet)
+
+# compare means:
+res.det <- t.test(c_value ~ position, 
+            data=stat_det, 
+            paired = TRUE, 
+            alternative = "two.sided")
+
+res.undet <- wilcox.test(c_value ~ position, 
+       data=stat_undet, 
+       paired = TRUE, 
+       alternative = "two.sided")
+
+cat("t test detected trials (sum, filtered; n=142):\n")
+cat("Estimated mean difference:", res.det$estimate, "\n")
+cat("p-value:", res.det$p.value, "\n\n")
+
+cat("wilcox test undetected trials (sum, filtered; n=140):\n")
+cat("Estimated mean difference:", res.undet$estimate, "\n")
+cat("p-value:", res.undet$p.value, "\n\n")
+
+```
+
+#### Numbtouch stats
+```{r}
+# localisation performance against 0.5 
+######################################
+
+shapiro.test(subset(df_loc_av, detection=="undet" & position=="all")$performance) 
+shapiro.test(subset(df_loc_av, detection=="undet" & position=="anat")$performance)
+shapiro.test(subset(df_loc_av, detection=="undet" & position=="cross")$performance) 
+
+shapiro.test(subset(df_quick_sum, detection=="undet" & position=="all")$performance) 
+shapiro.test(subset(df_quick_sum, detection=="undet" & position=="anat")$performance) 
+shapiro.test(subset(df_quick_sum, detection=="undet" & position=="cross")$performance) 
+
+
+stat_all_av <- t.test(subset(df_loc_av, detection=="undet" & position=="all")$performance, mu = 0.5, alternative = "greater") 
+cat("t test overall (av):\n")
+cat("Estimate:", stat_all_av$estimate, "\n")
+cat("P-value:", stat_all_av$p.value, "\n\n")
+
+stat_all_sum <- t.test(subset(df_loc_sum, detection=="undet" & position=="all")$performance, mu = 0.5, alternative = "greater") 
+cat("t test overall (sum):\n")
+cat("Estimate:", stat_all_sum$estimate, "\n")
+cat("P-value:", stat_all_sum$p.value, "\n\n")
+
+
+stat_anat_av <- t.test(subset(df_loc_av, detection=="undet" & position=="anat")$performance, mu = 0.5, alternative = "greater") 
+cat("t test in anatomical (av):\n")
+cat("Estimate:", stat_anat_av$estimate, "\n")
+cat("P-value:", stat_anat_av$p.value, "\n\n")
+
+stat_anat_sum <- t.test(subset(df_loc_sum, detection=="undet" & position=="anat")$performance, mu = 0.5, alternative = "greater") 
+cat("t test in anatomical (sum):\n")
+cat("Estimate:", stat_anat_sum$estimate, "\n")
+cat("P-value:", stat_anat_sum$p.value, "\n\n")
+
+
+stat_cross_av <- t.test(subset(df_loc_av, detection=="undet" & position=="cross")$performance, mu = 0.5, alternative = "greater") 
+cat("t test in crossed (av):\n")
+cat("Estimate:", stat_cross_av$estimate, "\n")
+cat("P-value:", stat_cross_av$p.value, "\n\n")
+
+stat_cross_sum <- t.test(subset(df_loc_sum, detection=="undet" & position=="cross")$performance, mu = 0.5, alternative = "greater") 
+cat("t test in crossed (sum):\n")
+cat("Estimate:", stat_cross_sum$estimate, "\n")
+cat("P-value:", stat_cross_sum$p.value, "\n\n")
+
+
+
+# localisation d_prime against 0 
+#################################
+
+shapiro.test(subset(sdt_av, detection=="undet" & position=="all")$d_prime) 
+shapiro.test(subset(sdt_av, detection=="undet" & position=="anat")$d_prime)
+shapiro.test(subset(sdt_av, detection=="undet" & position=="cross")$d_prime) 
+
+shapiro.test(subset(sdt_sum, detection=="undet" & position=="all")$d_prime) 
+shapiro.test(subset(sdt_sum, detection=="undet" & position=="anat")$d_prime) 
+shapiro.test(subset(sdt_sum, detection=="undet" & position=="cross")$d_prime) 
+
+
+stat_all_av <- t.test(subset(sdt_av, detection=="undet" & position=="all")$d_prime, mu = 0, alternative = "greater") 
+cat("t test overall (av):\n")
+cat("Estimate:", stat_all_av$estimate, "\n")
+cat("P-value:", stat_all_av$p.value, "\n\n")
+
+stat_all_sum <- t.test(subset(sdt_sum, detection=="undet" & position=="all")$d_prime, mu = 0, alternative = "greater") 
+cat("t test overall (sum):\n")
+cat("Estimate:", stat_all_sum$estimate, "\n")
+cat("P-value:", stat_all_sum$p.value, "\n\n")
+
+
+stat_anat_av <- t.test(subset(sdt_av, detection=="undet" & position=="anat")$d_prime, mu = 0, alternative = "greater") 
+cat("t test in anatomical (av):\n")
+cat("Estimate:", stat_anat_av$estimate, "\n")
+cat("P-value:", stat_anat_av$p.value, "\n\n")
+
+stat_anat_sum <- t.test(subset(sdt_sum, detection=="undet" & position=="anat")$d_prime, mu = 0, alternative = "greater") 
+cat("t test in anatomical (sum):\n")
+cat("Estimate:", stat_anat_sum$estimate, "\n")
+cat("P-value:", stat_anat_sum$p.value, "\n\n")
+
+
+stat_cross_av <- t.test(subset(sdt_av, detection=="undet" & position=="cross")$d_prime, mu = 0, alternative = "greater") 
+cat("t test in crossed (av):\n")
+cat("Estimate:", stat_cross_av$estimate, "\n")
+cat("P-value:", stat_cross_av$p.value, "\n\n")
+
+stat_cross_sum <- t.test(subset(sdt_sum, detection=="undet" & position=="cross")$d_prime, mu = 0, alternative = "greater") 
+cat("t test in crossed (sum):\n")
+cat("Estimate:", stat_cross_sum$estimate, "\n")
+cat("P-value:", stat_cross_sum$p.value, "\n\n")
+
+```
+
+#### Numbtouch stats for trials with 0.2 < resp1_t < 0.5 s 
+
+```{r}
+fname <- file.path(data_dir, "yc_loc-quick_av.csv")
+df_quick_av <- read.table(fname, header = TRUE, sep = ",", fill = TRUE, stringsAsFactors = FALSE)
+
+fname <- file.path(data_dir, "yc_loc-quick_sum.csv")
+df_quick_sum <- read.table(fname, header = TRUE, sep = ",", fill = TRUE, stringsAsFactors = FALSE)
+
+
+# localisation performance against 0.5 
+######################################
+
+shapiro.test(subset(df_quick_av, position=="loc_all")$performance) 
+shapiro.test(subset(df_quick_av, position=="loc_anat")$performance)
+shapiro.test(subset(df_quick_av, position=="loc_cross")$performance) 
+
+shapiro.test(subset(df_quick_sum, position=="loc_all")$performance) 
+shapiro.test(subset(df_quick_sum, position=="loc_anat")$performance) 
+shapiro.test(subset(df_quick_sum, position=="loc_cross")$performance) 
+
+
+stat_all_av <- t.test(subset(df_quick_av, position=="loc_all")$performance, mu = 0.5, alternative = "greater") 
+cat("t test overall (av):\n")
+cat("Estimate:", stat_all_av$estimate, "\n")
+cat("P-value:", stat_all_av$p.value, "\n\n")
+
+stat_all_sum <- wilcox.test(subset(df_quick_sum, position=="loc_all")$performance, mu = 0.5, alternative = "greater") 
+cat("wilcox test overall (sum):\n")
+cat("Estimate:", stat_all_sum$estimate, "\n")
+cat("P-value:", stat_all_sum$p.value, "\n\n")
+
+
+stat_anat_av <- t.test(subset(df_quick_av, position=="loc_anat")$performance, mu = 0.5, alternative = "greater") 
+cat("t test in anatomical (av):\n")
+cat("Estimate:", stat_anat_av$estimate, "\n")
+cat("P-value:", stat_anat_av$p.value, "\n\n")
+
+stat_anat_sum <- wilcox.test(subset(df_quick_sum, position=="loc_anat")$performance, mu = 0.5, alternative = "greater") 
+cat("wilcox test in anatomical (sum):\n")
+cat("Estimate:", stat_anat_sum$estimate, "\n")
+cat("P-value:", stat_anat_sum$p.value, "\n\n")
+
+
+stat_cross_av <- t.test(subset(df_quick_av, position=="loc_cross")$performance, mu = 0.5, alternative = "greater") 
+cat("t test in crossed (av):\n")
+cat("Estimate:", stat_cross_av$estimate, "\n")
+cat("P-value:", stat_cross_av$p.value, "\n\n")
+
+stat_cross_sum <- wilcox.test(subset(df_quick_sum, position=="loc_cross")$performance, mu = 0.5, alternative = "greater") 
+cat("wilcox test in crossed (sum):\n")
+cat("Estimate:", stat_cross_sum$estimate, "\n")
+cat("P-value:", stat_cross_sum$p.value, "\n\n")
+
+```

@@ -1,0 +1,1299 @@
+---
+title: "resptime_analysis"
+author: "Lena Lange"
+date: "2023-05-24"
+output: html_document
+---
+
+Compare mean response times (resp1_t & resp2_t) of anatomical and crossed position
+
+Look at detection & localisation performance by resp1_t
+  -sort trials of every block by resp1_t
+  -bin by 100 ms
+  -calculate performance score for every bin
+  -average bin performance scores across A) blocks within subject, then across
+                                         B) all blocks pooled together
+  -repeat only for undetected trials (with localisation performance)
+
+#### Packages, settings, data frame
+
+```{r setup, include=FALSE}
+
+.libPaths("/data/pt_02438/lena/R/") # set path to save packages
+library(tidyverse)
+library(ggpubr)
+library(TOSTER) 
+
+options(scipen = 999) # turn off e notation
+
+data_dir <- '/data/pt_02438/numbtouch_neglect/young_controls/yc_behav/'
+code_dir <- '/data/pt_02438/numbtouch_neglect/young_controls/yc_behav/R/'
+plot_dir <- '/data/pt_02438/numbtouch_neglect/young_controls/yc_behav/plots/'
+
+behav_data <- paste(data_dir, 'yc_behav_excl.csv', sep = '')
+df <- read.table(behav_data, header = TRUE, sep = ",", fill = TRUE, stringsAsFactors = FALSE) 
+
+# demographics of subjects included in behavioural analysis
+df_demo <- subset(df, ID!=28, select=c(ID, age, gender)) %>%
+  group_by(ID, age, gender) %>%
+  summarise()
+mean(df_demo$age)
+sd(df_demo$age)
+
+df <- subset(df, select=c(ID, block, block_type, stim, resp1, resp2, det, loca, resp1_t, resp2_t)) # keep relevant columns only
+
+df <- df %>% # add accuracy columns
+  mutate(
+    acc_det = 'Na',
+    acc_det = as.integer((stim!=0 & resp1==1) | (stim==0 & resp1==0)),
+    
+    acc_loc = 'Na',
+    acc_loc = as.integer((stim==1 & resp2==1) | (stim==2 & resp2==2))
+    )
+
+# exclude yc28 (after de-briefing questionnaire)
+df <- subset(df, ID!=28)
+
+# exclude trials with resp1_t > 3s
+df_filt <- subset(df, resp1_t < 3) 
+
+# exclude catch trials
+df_loc <- subset(df_filt, loca!="catch") 
+
+# subset dfs for detected & undetected trials
+df_det <- subset(df_loc, det=="hitF1" | det=="hitF2") 
+df_undet <- subset(df_loc, det=="missF1" | det=="missF2")
+
+```
+
+#### 1) Mean Response Times between positions 
+(no sign. differences)
+
+```{r}
+# initialize empty df to store resp. times
+mean_resptimes_sum <- data.frame(
+  ID = numeric(0),
+  block = numeric(0),
+  block_type = factor(levels = character(0), labels = character(0)),
+  mean_resp1_t = numeric(0),
+  mean_resp2_t = numeric(0)
+)
+
+
+# calculate mean resp1_t and resp2_t for every block by position:
+
+for (i in unique(df$ID)) { # iterate over participants
+  df_ID <- subset(df, ID==i)
+  
+  for (j in unique(df_ID$block)){ # iterate over blocks of current participant
+    df_block <- subset(df_ID, block==j)
+    
+    # calculate the means of resp1_t and resp2_t grouped by block_type
+    block_means <- df_block %>%
+      group_by(block_type) %>%
+      summarise(
+        mean_resp1_t = mean(resp1_t),
+        mean_resp2_t = mean(resp2_t)
+      ) %>%
+      ungroup()  
+    
+    # add ID and block to the block_means 
+    block_means$ID <- i
+    block_means$block <- j
+    block_means <- block_means %>% select(ID, block, block_type, mean_resp1_t, mean_resp2_t)
+    
+    # append block_means to mean_resptimes_sun
+    mean_resptimes_sum <- rbind(mean_resptimes_sum, block_means)
+    
+  }}
+
+# rename "block_type" column to "position"
+mean_resptimes_sum <- mean_resptimes_sum %>%
+  rename(position = block_type)
+
+# convert 1 to "anat" and 2 to "cross" 
+mean_resptimes_sum$position <- ifelse(mean_resptimes_sum$position == 1, "anat", "cross")
+
+
+
+# Compare response times means between positions:
+anat <- subset(mean_resptimes_sum, position=="anat")
+cross <- subset(mean_resptimes_sum, position=="cross")
+res.resp1 <- t.test(anat$mean_resp1_t, cross$mean_resp1_t, paired = TRUE)
+res.resp2 <- t.test(anat$mean_resp2_t, cross$mean_resp2_t, paired = TRUE)
+
+
+
+# Compare within-subject averages of response times means between positions:
+mean_resptimes_av <- mean_resptimes_sum %>%
+  group_by(ID, position) %>%
+  summarise(
+    IDav_resp1_t = mean(mean_resp1_t),
+    IDav_resp2_t = mean(mean_resp2_t)
+  )
+anat <- subset(mean_resptimes_av, position=="anat")
+cross <- subset(mean_resptimes_av, position=="cross")
+res.resp1 <- t.test(anat$IDav_resp1_t, cross$IDav_resp1_t, paired = TRUE)
+res.resp2 <- t.test(anat$IDav_resp2_t, cross$IDav_resp2_t, paired = TRUE)
+
+```
+
+```{r}
+# Plot response time means of pooled data:
+
+palette <- c("#0072C1", "#EFC000")
+
+mean_resptimes_long <- mean_resptimes_sum %>%
+  pivot_longer(
+    cols = starts_with("mean_resp"),
+    names_to = "mean_resp_type",
+    values_to = "mean_resp_t"
+  )
+
+mean_resptimes_long <- mean_resptimes_long %>%
+  rename(task = mean_resp_type)
+
+mean_resptimes_long$task <- ifelse(mean_resptimes_long$task == "mean_resp1_t", "det", "loc")
+
+
+# box plot with outliers
+ggplot(mean_resptimes_long, aes(x=task, y=mean_resp_t, fill=position))+
+  geom_boxplot()+
+  labs(title="mean response times (pooled data)", x ="task", y = "mean response time (s)")+
+  scale_x_discrete(breaks=c("det", "loc"),
+                   labels=c("Y/N", "2AFC"))+
+  theme_linedraw()+
+  theme(axis.text.x=element_text(size=12))+
+  scale_fill_manual(values=palette, labels=c("anatomical", "crossed"))+
+  ylim(0, 2)
+
+# filter outliers by 1.5 * QR rule
+mean_resptimes_filt <- mean_resptimes_long %>%
+  group_by(task, position) %>%
+  mutate(q1 = quantile(mean_resp_t, 0.25),
+         q3 = quantile(mean_resp_t, 0.75),
+         iqr = q3 - q1,
+         lower_limit = q1 - 1.5 * iqr,
+         upper_limit = q3 + 1.5 * iqr) %>%
+  filter(mean_resp_t >= lower_limit & mean_resp_t <= upper_limit)
+
+# throw out blocks where values were excluded in one of the position groups
+mean_resptimes_stat <- mean_resptimes_filt %>%
+  group_by(ID, block, task) %>%
+  filter(all(c("anat", "cross") %in% position))
+
+# box plot without outliers
+ggplot(mean_resptimes_filt, aes(x=task, y=mean_resp_t, fill=position))+
+  geom_boxplot(outlier.shape = NA)+
+  labs(title="mean response times (pooled data)", x ="task", y = "mean response time (s)")+
+  scale_x_discrete(breaks=c("det", "loc"),
+                   labels=c("Y/N", "2AFC"))+
+  theme_linedraw()+
+  theme(axis.text.x=element_text(size=12))+
+  scale_fill_manual(values=palette, labels=c("anatomical", "crossed"))+
+  ylim(0, 2)
+
+```
+
+```{r}
+#### Stats between positions: with outliers
+
+# resp1
+diff_both <- with(subset(resp1, finger=="both"), mean_resp1_t[position=="anat"] - mean_resp1_t[position=="cross"])
+diff_F1 <- with(subset(resp1, finger=="f1"), mean_resp1_t[position=="anat"] - mean_resp1_t[position=="cross"])
+diff_F2 <- with(subset(resp1, finger=="f2"), mean_resp1_t[position=="anat"] - mean_resp1_t[position=="cross"])
+
+shapiro.test(diff_both) # W = 0.9648, p-value = 0.2568
+shapiro.test(diff_F1) # W = 0.96918, p-value = 0.3542
+shapiro.test(diff_F2) # W = 0.91585, p-value = 0.006488
+
+t.test(mean_resp1_t ~ position, data=subset(resp1, finger=="both" & position!="all"), paired = TRUE, alternative = "two.sided")
+# t = 0.21421, df = 38, p-value = 0.8315
+t.test(mean_resp1_t ~ position, data=subset(resp1, finger=="f1" & position!="all"), paired = TRUE, alternative = "two.sided")
+# t = 1.4443, df = 38, p-value = 0.1568
+wilcox.test(mean_resp1_t ~ position, data=subset(resp1, finger=="f2" & position!="all"), paired = TRUE, alternative = "two.sided") # V = 389, p-value = 0.9945
+
+
+# resp2
+diff_both <- with(subset(resp2, finger=="both"), mean_resp2_t[position=="anat"] - mean_resp2_t[position=="cross"])
+diff_F1 <- with(subset(resp2, finger=="f1"), mean_resp2_t[position=="anat"] - mean_resp2_t[position=="cross"])
+diff_F2 <- with(subset(resp2, finger=="f2"), mean_resp2_t[position=="anat"] - mean_resp2_t[position=="cross"])
+
+shapiro.test(diff_both) # W = 0.97894, p-value = 0.665
+shapiro.test(diff_F1) # W = 0.96637, p-value = 0.2886
+shapiro.test(diff_F2) # W = 0.97772, p-value = 0.6209
+
+t.test(mean_resp2_t ~ position, data=subset(resp2, finger=="both" & position!="all"), paired = TRUE, alternative = "two.sided")
+# t = -1.5121, df = 38, p-value = 0.1388
+t.test(mean_resp2_t ~ position, data=subset(resp2, finger=="f1" & position!="all"), paired = TRUE, alternative = "two.sided")
+# t = -1.8691, df = 38, p-value = 0.06934
+t.test(mean_resp2_t ~ position, data=subset(resp2, finger=="f2" & position!="all"), paired = TRUE, alternative = "two.sided")
+# t = -0.95652, df = 38, p-value = 0.3449
+
+
+
+
+#### Stats between positions: NO outliers
+
+# resp1
+diff_both <- with(subset(resp1_filt, finger=="both"), mean_resp1_t[position=="anat"] - mean_resp1_t[position=="cross"])
+diff_F1 <- with(subset(resp1_filt, finger=="f1"), mean_resp1_t[position=="anat"] - mean_resp1_t[position=="cross"])
+diff_F2 <- with(subset(resp1_filt, finger=="f2"), mean_resp1_t[position=="anat"] - mean_resp1_t[position=="cross"])
+
+shapiro.test(diff_both) 
+shapiro.test(diff_F1) 
+shapiro.test(diff_F2) 
+
+t.test(mean_resp1_t ~ position, data=subset(resp1_filt, finger=="both" & position!="all"), paired = TRUE, alternative = "two.sided")
+# t = 0.45154, df = 35, p-value = 0.6544
+t.test(mean_resp1_t ~ position, data=subset(resp1_filt, finger=="f1" & position!="all"), paired = TRUE, alternative = "two.sided")
+# t = 0.33517, df = 35, p-value = 0.7395
+t.test(mean_resp1_t ~ position, data=subset(resp1_filt, finger=="f2" & position!="all"), paired = TRUE, alternative = "two.sided") 
+# t = -0.40565, df = 35, p-value = 0.6875
+
+
+# resp2
+diff_both <- with(subset(resp2_filt, finger=="both"), mean_resp2_t[position=="anat"] - mean_resp2_t[position=="cross"])
+diff_F1 <- with(subset(resp2_filt, finger=="f1"), mean_resp2_t[position=="anat"] - mean_resp2_t[position=="cross"])
+diff_F2 <- with(subset(resp2_filt, finger=="f2"), mean_resp2_t[position=="anat"] - mean_resp2_t[position=="cross"])
+
+shapiro.test(diff_both) 
+shapiro.test(diff_F1) 
+shapiro.test(diff_F2) 
+
+t.test(mean_resp2_t ~ position, data=subset(resp2_filt, finger=="both" & position!="all"), paired = TRUE, alternative = "two.sided")
+# t = -1.7268, df = 33, p-value = 0.09355
+t.test(mean_resp2_t ~ position, data=subset(resp2_filt, finger=="f1" & position!="all"), paired = TRUE, alternative = "two.sided")
+# t = -1.2056, df = 33, p-value = 0.2365
+t.test(mean_resp2_t ~ position, data=subset(resp2_filt, finger=="f2" & position!="all"), paired = TRUE, alternative = "two.sided")
+# t = -0.69733, df = 33, p-value = 0.4905
+
+
+```
+
+```{r}
+#### Stats between fingers: with outliers
+
+# resp1
+diff_all <- with(subset(resp1, position=="all"), mean_resp1_t[finger=="f1"] - mean_resp1_t[finger=="f2"])
+diff_anat <- with(subset(resp1, position=="anat"), mean_resp1_t[finger=="f1"] - mean_resp1_t[finger=="f2"])
+diff_cross <- with(subset(resp1, position=="cross"), mean_resp1_t[finger=="f1"] - mean_resp1_t[finger=="f2"])
+
+shapiro.test(diff_all) 
+shapiro.test(diff_anat) 
+shapiro.test(diff_cross)
+
+wilcox.test(mean_resp1_t ~ finger, data=subset(resp1, position=="all" & finger!="both"), paired = TRUE, alternative = "two.sided")
+# V = 389, p-value = 0.9945
+wilcox.test(mean_resp1_t ~ finger, data=subset(resp1, position=="anat" & finger!="both"), paired = TRUE, alternative = "two.sided")
+# V = 397, p-value = 0.9285
+t.test(mean_resp1_t ~ finger, data=subset(resp1, position=="cross" & finger!="both"), paired = TRUE, alternative = "two.sided")
+ # t = -1.0385, df = 38, p-value = 0.3056
+
+
+# resp2
+diff_all <- with(subset(resp2, position=="all"), mean_resp2_t[finger=="f1"] - mean_resp2_t[finger=="f2"])
+diff_anat <- with(subset(resp2, position=="anat"), mean_resp2_t[finger=="f1"] - mean_resp2_t[finger=="f2"])
+diff_cross <- with(subset(resp2, position=="cross"), mean_resp2_t[finger=="f1"] - mean_resp2_t[finger=="f2"])
+
+shapiro.test(diff_all) 
+shapiro.test(diff_anat) 
+shapiro.test(diff_cross)
+
+wilcox.test(mean_resp2_t ~ finger, data=subset(resp2, position=="all" & finger!="both"), paired = TRUE, alternative = "two.sided")
+# V = 400, p-value = 0.8957
+wilcox.test(mean_resp2_t ~ finger, data=subset(resp2, position=="anat" & finger!="both"), paired = TRUE, alternative = "two.sided")
+# V = 343, p-value = 0.5206
+wilcox.test(mean_resp2_t ~ finger, data=subset(resp2, position=="cross" & finger!="both"), paired = TRUE, alternative = "two.sided")
+ # V = 362, p-value = 0.7043
+
+
+
+
+#### Stats between fingers: NO outliers
+
+# resp1
+diff_all <- with(subset(resp1_filt, position=="all" & finger!="both"), mean_resp1_t[finger=="f1"] - mean_resp1_t[finger=="f2"])
+diff_anat <- with(subset(resp1_filt, position=="anat" & finger!="both"), mean_resp1_t[finger=="f1"] - mean_resp1_t[finger=="f2"])
+diff_cross <- with(subset(resp1_filt, position=="cross" & finger!="both"), mean_resp1_t[finger=="f1"] - mean_resp1_t[finger=="f2"])
+
+shapiro.test(diff_both) 
+shapiro.test(diff_F1)
+shapiro.test(diff_F2)
+
+t.test(mean_resp1_t ~ finger, data=subset(resp1_filt, position=="all" & finger!="both"), paired = TRUE, alternative = "two.sided")
+# t = -1.0977, df = 35, p-value = 0.2798
+t.test(mean_resp1_t ~ finger, data=subset(resp1_filt, position=="anat" & finger!="both"), paired = TRUE, alternative = "two.sided")
+# t = -0.7136, df = 35, p-value = 0.4802
+t.test(mean_resp1_t ~ finger, data=subset(resp1_filt, position=="cross" & finger!="both"), paired = TRUE, alternative = "two.sided")
+# t = -1.2879, df = 35, p-value = 0.2062
+
+
+# resp2
+diff_all <- with(subset(resp2_filt, position=="all" & finger!="both"), mean_resp2_t[finger=="f1"] - mean_resp2_t[finger=="f2"])
+diff_anat <- with(subset(resp2_filt, position=="anat" & finger!="both"), mean_resp2_t[finger=="f1"] - mean_resp2_t[finger=="f2"])
+diff_cross <- with(subset(resp2_filt, position=="cross" & finger!="both"), mean_resp2_t[finger=="f1"] - mean_resp2_t[finger=="f2"])
+
+shapiro.test(diff_both) 
+shapiro.test(diff_F1)
+shapiro.test(diff_F2)
+
+t.test(mean_resp2_t ~ finger, data=subset(resp2_filt, position=="all" & finger!="both"), paired = TRUE, alternative = "two.sided")
+# t = -0.80838, df = 33, p-value = 0.4247
+t.test(mean_resp2_t ~ finger, data=subset(resp2_filt, position=="anat" & finger!="both"), paired = TRUE, alternative = "two.sided")
+# t = -0.78241, df = 33, p-value = 0.4395
+t.test(mean_resp2_t ~ finger, data=subset(resp2_filt, position=="cross" & finger!="both"), paired = TRUE, alternative = "two.sided")
+# t = -0.46984, df = 33, p-value = 0.6416
+
+
+```
+
+# 2) Localisation performance by response time
+
+#### >> All trials, per ID & block
+
+```{r}
+# bin response times & calc. hit rate for each bin (per participant)
+bin_breaks <- c(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9, 3.0)
+
+# Create an empty data frame to store localisation performances of each bin
+loc_df <- data.frame(ID = integer(),
+                     block = integer(),
+                     bin = integer(),
+                     loc_perf = double(),
+                     n_trials = integer(),
+                     stringsAsFactors = FALSE)
+
+# Loop through each ID
+for (i in unique(df_loc$ID)) {
+  ID_df <- df_loc %>%
+    filter(ID == i)  # Subset data for the current participant
+  
+  # Loop through each block
+  for (j in unique(ID_df$block)) {
+    ID_df <- ID_df %>%
+      filter(block == j)  # Subset data for the current block
+  
+    # Bin trials of current block by response time to detection task
+    ID_df$bin <- cut(ID_df$resp1_t, breaks = bin_breaks)
+    
+    # Calculate localisation performance within each bin, add ID & block number
+    bin_loc_perf <- ID_df %>%
+      group_by(bin) %>% 
+      summarise(loc_perf = sum(loca == "hit" | loca == "CR") / sum(loca %in% c("hit", "miss", "CR", "FA")),
+                n_trials = n())
+    
+    bin_loc_perf$ID <- ID_df$ID[1]
+    bin_loc_perf$block <- j
+    
+    # Append localisation performances of each bin to loc_df
+    loc_df <- rbind(loc_df, bin_loc_perf)
+    }}
+
+remove(ID_df, ID_df, bin_loc_perf)
+
+# number all the bins & sort columns
+loc_df$bin_nr <- as.integer(loc_df$bin)
+loc_df <- subset(loc_df, select=c(ID, block, bin_nr, bin, n_trials, loc_perf))
+
+# summarise the number of trials in each bin across IDs
+trial_counts <- loc_df %>%
+  group_by(bin_nr, bin) %>%
+  summarise(n_trials = sum(n_trials))
+
+# for every participant, average loc_perf across blocks within every bin
+av_df <- loc_df %>%
+  group_by(ID, bin, bin_nr) %>%
+  summarise(av_loc_perf = mean(loc_perf)) 
+
+# average loc performance across participants within every bin
+av_se_df <- av_df %>%
+  group_by(bin, bin_nr) %>%
+  summarise(bin_loc_perf = mean(av_loc_perf)*100,
+            se = sd(av_loc_perf)/sqrt(n())*100
+            ) 
+# add trial counts for every bin
+av_se_df <- merge(av_se_df, trial_counts, by = c("bin", "bin_nr")) 
+
+# plot av_loc_perf of every bin with error bars
+new_labels <- c("0.1-0.2s", "0.2-0.3s", "0.3-0.4s", "0.4-0.5s", "0.5-0.6s", "0.6-0.7s", "0.7-0.8s", "0.8-0.9s", "0.9-1.0s",
+                "1.0-1.1s", "1.1-1.2s", "1.2-1.3s", "1.3-1.4s", "1.4-1.5s", "1.5-1.6s", "1.6-1.7s", "1.7-1.8s", "1.8-1.9s", 
+                "1.9-2.0s", "2.0-2.1s", "2.1s-2.2s", "2.2-2.3s", "2.3-2.4s", "2.4-2.5s", "2.5-2.6s", "2.6-2.7s", "2.7-2.8s", 
+                "2.8-2.9s", "2.9-3.0s")
+
+ggplot(av_se_df, aes(x=bin_nr, y=bin_loc_perf))+
+  geom_line()+
+  geom_errorbar(aes(ymin=bin_loc_perf-se, ymax=bin_loc_perf+se), width=0.2)+
+  ggtitle("Localisation performance by response time (n=38)")+
+  labs(x = "Response Time (to detection task)", y = "Localisation Performance [%]") +
+  theme_linedraw()+
+  scale_x_continuous(breaks = av_se_df$bin_nr, labels = new_labels) +
+  theme(axis.text.x = element_text(angle = 80, hjust = 1))
+
+# plot trial numbers per bin
+ggplot(av_se_df, aes(x = bin_nr, y = n_trials)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  geom_text(aes(label = n_trials), vjust = -0.5, size = 3) +  # Add text annotations
+  labs(x = "bin", y = "trials") +
+  theme_linedraw() +
+  ggtitle("number of trials by bin") +
+  scale_x_continuous(breaks = av_se_df$bin_nr, labels = new_labels) +
+  theme(axis.text.x = element_text(angle = 80, hjust = 1))
+
+# plot fitted line
+av_se_fit <- av_se_df[1:16,]
+# bin nr. 1: 94.27 +/- 2.5 %
+# bin nr. 16: 64.14 +/- 4.3 %
+
+labels <- av_se_fit %>%
+  mutate(plot_label = sprintf("%.2f %%\n(± %.1f %%)", bin_loc_perf, se))
+
+
+ggplot(av_se_fit, aes(x=bin_nr, y=bin_loc_perf))+
+  geom_line()+
+  geom_errorbar(aes(ymin=bin_loc_perf-se, ymax=bin_loc_perf+se), width=0.2)+
+  ggtitle("Localisation performance (all trials) by response time (n=38)")+
+  labs(x = "Response Time (to detection task)", y = "Localisation Performance [%]") +
+  theme_linedraw()+
+  scale_x_continuous(breaks = av_se_df$bin_nr, labels = new_labels) +
+  theme(axis.text.x = element_text(angle = 80, hjust = 1)) + 
+  ylim(25, 100) +
+  geom_smooth(method=lm, se=FALSE) +
+  geom_text(data = labels[c(1,16),], aes(label = plot_label),
+            nudge_y = -14, size = 3)
+
+```
+
+```{r}
+first_bin <- subset(av_df, bin_nr==1)$av_loc_perf
+last_bin <- subset(av_df, bin_nr==16)$av_loc_perf
+performance_diff <- last_bin - first_bin
+
+# normality
+shapiro.test(performance_diff)
+
+# Paired-sample t-test 
+t.test(performance_diff)
+# t = -5.6491, df = 33, p-value = 0.000002714
+
+```
+
+
+#### >> All trials, per ID (blocks pooled) 
+
+```{r}
+# bin response times & calc. hit rate for each bin (per participant)
+bin_breaks <- c(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9, 3.0)
+
+# Create an empty data frame to store localisation performances of each bin
+loc_df <- data.frame(ID = integer(),
+                     bin = integer(),
+                     loc_perf = double(),
+                     n_trials = integer(),
+                     stringsAsFactors = FALSE)
+
+# Loop through each ID
+for (i in unique(df_loc$ID)) {
+  ID_df <- df_loc %>%
+    filter(ID == i)  # Subset data for the current participant
+  
+    # Bin trials of current ID by response time to detection task
+    ID_df$bin <- cut(ID_df$resp1_t, breaks = bin_breaks)
+    
+    # Calculate localisation performance within each bin, add ID 
+    bin_loc_perf <- ID_df %>%
+      group_by(bin) %>% 
+      summarise(loc_perf = sum(loca == "hit" | loca == "CR") / sum(loca %in% c("hit", "miss", "CR", "FA")),
+                n_trials = n())
+    
+    bin_loc_perf$ID <- ID_df$ID[1]
+    
+    # Append localisation performances of each bin to loc_df
+    loc_df <- rbind(loc_df, bin_loc_perf)
+    }
+
+remove(ID_df, bin_loc_perf)
+
+# number all the bins & sort columns
+loc_df$bin_nr <- as.integer(loc_df$bin)
+loc_df <- subset(loc_df, select=c(ID, bin_nr, bin, n_trials, loc_perf))
+
+# summarise n_trials of each bin across IDs
+trial_counts <- loc_df %>%
+  group_by(bin_nr, bin) %>%
+  summarise(n_trials = sum(n_trials))
+
+# average loc performance across IDs for every bin
+av_loc_df <- loc_df %>%
+  group_by(bin_nr) %>%
+  summarise(bin_loc_perf = mean(loc_perf)*100,
+            se = sd(loc_perf)/sqrt(n())*100
+            ) 
+# add trial counts for every bin
+av_loc_df <- merge(av_loc_df, trial_counts, by = c("bin_nr")) 
+
+# plot av_loc_perf of every bin with error bars
+new_labels <- c("0.1-0.2s", "0.2-0.3s", "0.3-0.4s", "0.4-0.5s", "0.5-0.6s", "0.6-0.7s", "0.7-0.8s", "0.8-0.9s", "0.9-1.0s",
+                "1.0-1.1s", "1.1-1.2s", "1.2-1.3s", "1.3-1.4s", "1.4-1.5s", "1.5-1.6s", "1.6-1.7s", "1.7-1.8s", "1.8-1.9s", 
+                "1.9-2.0s", "2.0-2.1s", "2.1s-2.2s", "2.2-2.3s", "2.3-2.4s", "2.4-2.5s", "2.5-2.6s", "2.6-2.7s", "2.7-2.8s", 
+                "2.8-2.9s", "2.9-3.0s")
+
+ggplot(av_loc_df, aes(x=bin_nr, y=bin_loc_perf))+
+  geom_line()+
+  geom_errorbar(aes(ymin=bin_loc_perf-se, ymax=bin_loc_perf+se), width=0.2)+
+  ggtitle("Localisation performance by response time (n=38)")+
+  labs(x = "Response Time (to detection task)", y = "Localisation Performance [%]") +
+  theme_linedraw()+
+  scale_x_continuous(breaks = av_loc_df$bin_nr, labels = new_labels) +
+  theme(axis.text.x = element_text(angle = 80, hjust = 1))
+
+# plot trial numbers per bin
+ggplot(av_loc_df, aes(x = bin_nr, y = n_trials)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  geom_text(aes(label = n_trials), vjust = -0.5, size = 3) +  # Add text annotations
+  labs(x = "bin", y = "trials") +
+  theme_linedraw() +
+  ggtitle("number of trials by bin") +
+  scale_x_continuous(breaks = av_loc_df$bin_nr, labels = new_labels) +
+  theme(axis.text.x = element_text(angle = 80, hjust = 1))
+
+# plot fitted line
+av_loc_fit <- av_loc_df[1:16,]
+
+labels <- av_loc_fit %>%
+  mutate(plot_label = sprintf("%.2f %%\n(± %.1f %%)", bin_loc_perf, se))
+
+ggplot(av_loc_fit, aes(x=bin_nr, y=bin_loc_perf))+
+  geom_line()+
+  geom_errorbar(aes(ymin=bin_loc_perf-se, ymax=bin_loc_perf+se), width=0.2)+
+  ggtitle("Localisation performance (all trials) by response time (n=38)")+
+  labs(x = "Response Time (to detection task)", y = "Localisation Performance [%]") +
+  theme_linedraw()+
+  scale_x_continuous(breaks = av_loc_df$bin_nr, labels = new_labels) +
+  theme(axis.text.x = element_text(angle = 80, hjust = 1)) + 
+  ylim(25, 100) +
+  geom_smooth(method=lm, se=FALSE) +
+  geom_text(data = labels[c(1,16),], aes(label = plot_label),
+            nudge_y = -14, size = 3)
+
+# compare det_perf of bin nr. 1 (93.59 ± 2.7%) and nr. 16 (66.25 ± 4.0%)
+bin_pairs <- loc_df %>%
+  group_by(ID) %>%
+  filter(all(c(1, 16) %in% bin_nr))
+bin1 <- subset(bin_pairs, bin_nr==1)$loc_perf
+bin16 <- subset(bin_pairs, bin_nr==16)$loc_perf
+diff <- bin1 - bin16
+shapiro.test(diff)
+
+res.t <- t.test(bin1, bin16, paired = TRUE)
+
+
+```
+
+#### >> Undetected, per ID & block
+
+```{r}
+# bin response times & calc. hit rate for each bin (per participant)
+bin_breaks <- c(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9, 3.0)
+
+# Create an empty data frame to store localisation performances of each bin
+loc_undet <- data.frame(ID = integer(),
+                        block = integer(),
+                        bin = integer(),
+                        loc_perf = double(),
+                        n_trials = integer(),
+                        stringsAsFactors = FALSE)
+
+# Loop through each ID
+for (i in unique(df_undet$ID)) {
+  ID_df <- subset(df_undet, ID == i)  # Subset data for the current participant
+  
+  # Loop through each block
+  for (j in unique(ID_df$block)) {
+    ID_df <- subset(ID_df, block == j)  # Subset data for the current block
+  
+    # Bin trials of current block by response time to detection task
+    ID_df$bin <- cut(ID_df$resp1_t, breaks = bin_breaks)
+    
+    # Calculate localisation performance within each bin, add ID & block number
+    bin_loc_perf <- ID_df %>%
+      group_by(bin) %>% 
+      summarise(loc_perf = sum(acc_loc==1)/sum(stim!=0),
+                # sum(loca == "hit" | loca == "CR") / sum(loca %in% c("hit", "miss", "CR", "FA"))
+                n_trials = n())
+    bin_loc_perf$ID <- ID_df$ID[1]
+    bin_loc_perf$block <- j
+    
+    # Append localisation performances of each bin to loc_undet
+    loc_undet <- rbind(loc_undet, bin_loc_perf)
+    }}
+
+remove(ID_df, ID_df, bin_loc_perf)
+
+# number all the bins & sort columns
+loc_undet$bin_nr <- as.integer(loc_undet$bin)
+loc_undet <- subset(loc_undet, select=c(ID, block, bin_nr, bin, n_trials, loc_perf))
+
+# calculate the number of trials in each bin 
+trial_counts <- loc_undet %>%
+  group_by(bin_nr, bin) %>%
+  summarise(n_trials = sum(n_trials))
+
+# for every participant, average loc_perf across blocks within every bin
+av_undet <- loc_undet %>%
+  group_by(ID, bin_nr) %>%
+  summarise(av_loc_perf = mean(loc_perf)) 
+
+# average loc performance across participants within every bin
+av_se_undet <- av_undet %>%
+  group_by(bin_nr) %>%
+  summarise(bin_loc_perf = mean(av_loc_perf)*100,
+            se = sd(av_loc_perf)/sqrt(n())*100
+            ) 
+# add trial counts for every bin
+av_se_undet <- merge(av_se_undet, trial_counts, by.x = "bin_nr", by.y = "bin_nr")
+
+# plot av_loc_perf of every bin with error bars
+new_labels <- c("0.1-0.2s", "0.2-0.3s", "0.3-0.4s", "0.4-0.5s", "0.5-0.6s", "0.6-0.7s", "0.7-0.8s", "0.8-0.9s", "0.9-1.0s",
+                "1.0-1.1s", "1.1-1.2s", "1.2-1.3s", "1.3-1.4s", "1.4-1.5s", "1.5-1.6s", "1.6-1.7s", "1.7-1.8s", "1.8-1.9s", 
+                "1.9-2.0s", "2.0-2.1s", "2.1s-2.2s", "2.2-2.3s", "2.3-2.4s", "2.4-2.5s", "2.5-2.6s", "2.6-2.7s", "2.7-2.8s", 
+                "2.8-2.9s", "2.9-3.0s")
+
+ggplot(av_se_undet, aes(x=bin_nr, y=bin_loc_perf))+
+  geom_line()+
+  geom_errorbar(aes(ymin=bin_loc_perf-se, ymax=bin_loc_perf+se), width=0.2)+
+  ggtitle("Localisation performance in undetected trials by response time (n=38)")+
+  labs(x = "Response Time (to detection task)", y = "Localisation Performance [%]") +
+  theme_linedraw()+
+  scale_x_continuous(breaks = av_se_undet$bin_nr, labels = new_labels) +
+  theme(axis.text.x = element_text(angle = 80, hjust = 1)) + 
+  ylim(25, 100) 
+
+# plot trial numbers per bin
+ggplot(av_se_undet, aes(x = bin_nr, y = n_trials)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  geom_text(aes(label = n_trials), vjust = -0.5, size = 3) +  # Add text annotations
+  labs(x = "bin", y = "trials") +
+  theme_linedraw() +
+  ggtitle("number of trials by bin") +
+  scale_x_continuous(breaks = av_se_undet$bin_nr, labels = new_labels) +
+  theme(axis.text.x = element_text(angle = 80, hjust = 1))
+
+# plot fitted line
+av_se_fit <- av_se_undet[2:14,]
+# bin nr. 2: 54.79 +/- 5.3 %
+# bin nr. 14: 64.15 +/- 5.2 %
+
+labels <- av_se_fit %>%
+  mutate(plot_label = sprintf("%.2f %%\n(± %.1f %%)", bin_loc_perf, se))
+
+ggplot(av_se_fit, aes(x=bin_nr, y=bin_loc_perf))+
+  geom_line()+
+  geom_errorbar(aes(ymin=bin_loc_perf-se, ymax=bin_loc_perf+se), width=0.2)+
+  ggtitle("Localisation performance in undetected trials by response time (n=38)")+
+  labs(x = "Response Time (to detection task)", y = "Localisation Performance [%]") +
+  theme_linedraw()+
+  scale_x_continuous(breaks = av_se_undet$bin_nr, labels = new_labels) +
+  theme(axis.text.x = element_text(angle = 80, hjust = 1)) + 
+  ylim(25, 100) +
+  geom_smooth(method=lm, se=FALSE) +
+  geom_text(data = labels[c(1,13),], aes(label = plot_label),
+            nudge_y = 10, size = 3)
+
+```
+
+```{r}
+paired_df <- av_undet %>%
+  group_by(ID) %>%
+  filter(all(c(2, 14) %in% bin_nr)) %>%
+  ungroup()
+
+first_bin <- subset(paired_df, bin_nr==2)$av_loc_perf
+last_bin <- subset(paired_df, bin_nr==14)$av_loc_perf
+performance_diff <- last_bin - first_bin
+
+# normality
+shapiro.test(performance_diff) # p-value = 0.04767
+
+# Paired-sample t-test 
+wilcox.test(performance_diff) # V = 218, p-value = 0.05372
+
+```
+
+#### >> Undetected, per ID (blocks pooled)
+
+```{r}
+# keep only undetected trials
+df_undet <- subset(df_loc, df_loc$det=="missF1" | df_loc$det=="missF2")
+
+# bin response times & calc. hit rate for each bin (per participant)
+bin_breaks <- c(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9, 3.0)
+
+# Create an empty data frame to store localisation performances of each bin
+loc_undet <- data.frame(ID = integer(),
+                        bin = integer(),
+                        loc_perf = double(),
+                        n_trials = integer(),
+                        stringsAsFactors = FALSE)
+
+# Loop through each ID
+for (i in unique(df_undet$ID)) {
+  ID_df <- df_undet %>%
+    filter(ID == i)  # Subset data for the current participant
+  
+  # Bin trials of current block by response time to detection task
+    ID_df$bin <- cut(ID_df$resp1_t, breaks = bin_breaks)
+    
+    # Calculate localisation performance within each bin, add ID & block number
+    bin_loc_perf <- ID_df %>%
+      group_by(bin) %>% 
+      summarise(loc_perf = sum(loca == "hit" | loca == "CR") / sum(loca %in% c("hit", "miss", "CR", "FA")),
+                n_trials = n())
+    bin_loc_perf$ID <- ID_df$ID[1]
+    
+    # Append localisation performances of each bin to loc_undet
+    loc_undet <- rbind(loc_undet, bin_loc_perf)
+    }
+
+remove(ID_df, ID_df, bin_loc_perf)
+
+# number all the bins & sort columns
+loc_undet$bin_nr <- as.integer(loc_undet$bin)
+loc_undet <- subset(loc_undet, select=c(ID, bin_nr, bin, n_trials, loc_perf))
+
+# summarise n_trials of each bin across IDs
+trial_counts <- loc_undet %>%
+  group_by(bin_nr, bin) %>%
+  summarise(n_trials = sum(n_trials))
+
+# average loc performance of every bin across IDs
+av_undet_loc_df <- loc_undet %>%
+  group_by(bin_nr) %>%
+  summarise(bin_loc_perf = mean(loc_perf)*100,
+            se = sd(loc_perf)/sqrt(n())*100
+            ) 
+# add trial counts for every bin
+av_undet_loc_df <- merge(av_undet_loc_df, trial_counts, by = c("bin_nr")) 
+
+# plot av_loc_perf of every bin with error bars
+new_labels <- c("0.1-0.2s", "0.2-0.3s", "0.3-0.4s", "0.4-0.5s", "0.5-0.6s", "0.6-0.7s", "0.7-0.8s", "0.8-0.9s", "0.9-1.0s",
+                "1.0-1.1s", "1.1-1.2s", "1.2-1.3s", "1.3-1.4s", "1.4-1.5s", "1.5-1.6s", "1.6-1.7s", "1.7-1.8s", "1.8-1.9s", 
+                "1.9-2.0s", "2.0-2.1s", "2.1s-2.2s", "2.2-2.3s", "2.3-2.4s", "2.4-2.5s", "2.5-2.6s", "2.6-2.7s", "2.7-2.8s", 
+                "2.8-2.9s", "2.9-3.0s")
+
+ggplot(av_undet_loc_df, aes(x=bin_nr, y=bin_loc_perf))+
+  geom_line()+
+  geom_errorbar(aes(ymin=bin_loc_perf-se, ymax=bin_loc_perf+se), width=0.2)+
+  ggtitle("Localisation performance in undetected trials by response time (n=38)")+
+  labs(x = "Response Time (to detection task)", y = "Localisation Performance [%]") +
+  theme_linedraw()+
+  scale_x_continuous(breaks = av_undet_loc_df$bin_nr, labels = new_labels) +
+  theme(axis.text.x = element_text(angle = 80, hjust = 1)) + 
+  ylim(25, 100) 
+
+# plot trial numbers per bin
+ggplot(av_undet_loc_df, aes(x = bin_nr, y = n_trials)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  geom_text(aes(label = n_trials), vjust = -0.5, size = 3) +  # Add text annotations
+  labs(x = "bin", y = "trials") +
+  theme_linedraw() +
+  ggtitle("number of trials by bin") +
+  scale_x_continuous(breaks = av_undet_loc_df$bin_nr, labels = new_labels) +
+  theme(axis.text.x = element_text(angle = 80, hjust = 1))
+
+# plot fitted line
+av_undet_loc_fit <- av_undet_loc_df[2:14,]
+
+labels <- av_undet_loc_fit %>%
+  mutate(plot_label = sprintf("%.2f %%\n(± %.1f %%)", bin_loc_perf, se))
+
+ggplot(av_undet_loc_fit, aes(x=bin_nr, y=bin_loc_perf))+
+  geom_line()+
+  geom_errorbar(aes(ymin=bin_loc_perf-se, ymax=bin_loc_perf+se), width=0.2)+
+  ggtitle("Localisation performance in undetected trials by response time (n=38)")+
+  labs(x = "Response Time (to detection task)", y = "Localisation Performance [%]") +
+  theme_linedraw()+
+  scale_x_continuous(breaks = av_undet_loc_df$bin_nr, labels = new_labels) +
+  theme(axis.text.x = element_text(angle = 80, hjust = 1)) + 
+  ylim(25, 100) +
+  geom_smooth(method=lm, se=FALSE) +
+  geom_text(data = labels[c(1,13),], aes(label = plot_label),
+            nudge_y = 10, size = 3)
+
+# compare loc_perf of bin nr. 2 (54.66 ± 5.1%) and nr. 14(65.25 ± 5.1%)
+bin_pairs <- loc_undet %>%
+  group_by(ID) %>%
+  filter(all(c(2, 14) %in% bin_nr))
+bin1 <- subset(bin_pairs, bin_nr==2)$loc_perf
+bin14 <- subset(bin_pairs, bin_nr==14)$loc_perf
+diff <- bin1 - bin14
+shapiro.test(diff)
+
+res.t <- t.test(bin1, bin14, paired = TRUE)
+
+
+```
+
+#### >>>> Is loc_perf significantly > 50% in bins with short response times?
+YES (p=0.03662)
+
+```{r}
+# Pool bin nr. 2 - 4 together (0.2 - 0.5 s)
+short_resptime_df <- subset(loc_undet, bin_nr==2 | bin_nr==3 | bin_nr==4)
+av_short_df <- short_resptime_df %>%
+  group_by(ID) %>%
+  summarise(short_loc_perf = mean(loc_perf))
+
+shapiro.test(av_short_df$short_loc_perf)
+t.test(av_short_df$short_loc_perf, mu = 0.5, alternative = "greater")
+```
+
+#### >>>> Does increase in loc_perf with resp_t get steeper when looking at participants with most conservative criterion?
+--> NO
+
+```{r}
+# load data frame with sdt measures of detection task
+fname <- file.path(data_dir, "yc_sdt-yn_av.csv")
+sdt_av <- read.table(fname, header = TRUE, sep = ",", fill = TRUE, stringsAsFactors = FALSE) 
+crit <- subset(sdt_av, position=="all" & finger=="both", select=c(ID, c_value)) # subset to overall c (both fingers, both positions)
+
+# the more positive c, the more conservative the decision criterion; take all IDs with c > 0.8
+conserv <- unique(subset(crit, c_value>0.8)$ID)
+# conserv <- list(1, 3, 5, 6, 11, 13, 16, 17, 19, 21, 22, 25, 26, 28, 31, 36, 38, 40)
+
+# Loop through IDs in list "conserv"
+for (i in conserv) {
+  ID_df <- df_undet %>%
+    filter(ID == i)  # Subset data for the current participant
+  
+  # Loop through each block
+  for (j in unique(ID_df$block)) {
+    ID_df <- ID_df %>%
+      filter(block == j)  # Subset data for the current block
+  
+    # Bin trials of current block by response time to detection task
+    ID_df$bin <- cut(ID_df$resp1_t, breaks = bin_breaks)
+    
+    # Calculate localisation performance within each bin, add ID & block number
+    bin_loc_perf <- ID_df %>%
+      group_by(bin) %>% 
+      summarise(loc_perf = sum(loca == "hit" | loca == "CR") / sum(loca %in% c("hit", "miss", "CR", "FA")),
+                n_trials = n())
+    bin_loc_perf$ID <- ID_df$ID[1]
+    bin_loc_perf$block <- j
+    
+    # Append localisation performances of each bin to loc_undet
+    loc_undet <- rbind(loc_undet, bin_loc_perf)
+    }}
+
+remove(ID_df, ID_df, bin_loc_perf)
+
+# number all the bins & sort columns
+loc_undet$bin_nr <- as.integer(loc_undet$bin)
+loc_undet <- subset(loc_undet, select=c(ID, block, bin_nr, bin, n_trials, loc_perf))
+
+# calculate the number of trials in each bin 
+trial_counts <- loc_undet %>%
+  group_by(bin_nr, bin) %>%
+  summarise(n_trials = sum(n_trials))
+
+# for every participant, average loc_perf across blocks within every bin
+av_undet <- loc_undet %>%
+  group_by(ID, bin_nr) %>%
+  summarise(av_loc_perf = mean(loc_perf)) 
+
+# average loc performance across participants within every bin
+av_se_undet <- av_undet %>%
+  group_by(bin_nr) %>%
+  summarise(bin_loc_perf = mean(av_loc_perf)*100,
+            se = sd(av_loc_perf)/sqrt(n())*100
+            ) 
+# add trial counts for every bin
+av_se_undet <- merge(av_se_undet, trial_counts, by.x = "bin_nr", by.y = "bin_nr")
+
+# plot av_loc_perf of every bin with error bars
+new_labels <- c("0.1-0.2s", "0.2-0.3s", "0.3-0.4s", "0.4-0.5s", "0.5-0.6s", "0.6-0.7s", "0.7-0.8s", "0.8-0.9s", "0.9-1.0s",
+                "1.0-1.1s", "1.1-1.2s", "1.2-1.3s", "1.3-1.4s", "1.4-1.5s", "1.5-1.6s", "1.6-1.7s", "1.7-1.8s", "1.8-1.9s", 
+                "1.9-2.0s", "2.0-2.1s", "2.1s-2.2s", "2.2-2.3s", "2.3-2.4s", "2.4-2.5s", "2.5-2.6s", "2.6-2.7s", "2.7-2.8s", 
+                "2.8-2.9s", "2.9-3.0s")
+
+ggplot(av_se_undet, aes(x=bin_nr, y=bin_loc_perf))+
+  geom_line()+
+  geom_errorbar(aes(ymin=bin_loc_perf-se, ymax=bin_loc_perf+se), width=0.2)+
+  ggtitle("Localisation performance in undetected trials by response time (n=39)")+
+  labs(x = "Response Time (to detection task)", y = "Localisation Performance [%]") +
+  theme_linedraw()+
+  scale_x_continuous(breaks = av_se_undet$bin_nr, labels = new_labels) +
+  theme(axis.text.x = element_text(angle = 80, hjust = 1)) + 
+  ylim(25, 100) 
+
+# plot trial numbers per bin
+ggplot(av_se_undet, aes(x = bin_nr, y = n_trials)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  geom_text(aes(label = n_trials), vjust = -0.5, size = 3) +  # Add text annotations
+  labs(x = "bin", y = "trials") +
+  theme_linedraw() +
+  ggtitle("number of trials by bin") +
+  scale_x_continuous(breaks = av_se_undet$bin_nr, labels = new_labels) +
+  theme(axis.text.x = element_text(angle = 80, hjust = 1))
+
+# plot fitted line
+av_se_fit <- av_se_undet[3:11,]
+ggplot(av_se_fit, aes(x=bin_nr, y=bin_loc_perf))+
+  geom_line()+
+  geom_errorbar(aes(ymin=bin_loc_perf-se, ymax=bin_loc_perf+se), width=0.2)+
+  ggtitle("Localisation performance in undetected trials by response time (n=39)")+
+  labs(x = "Response Time (to detection task)", y = "Localisation Performance [%]") +
+  theme_linedraw()+
+  scale_x_continuous(breaks = av_se_undet$bin_nr, labels = new_labels) +
+  theme(axis.text.x = element_text(angle = 80, hjust = 1)) + 
+  ylim(25, 100) +
+  geom_smooth(method=lm, se=FALSE)
+
+```
+
+#### >> Detected
+
+```{r}
+# keep only undetected trials
+df_det <- subset(df_loc, df_loc$det=="hitF1" | df_loc$det=="hitF2")
+
+# bin response times & calc. hit rate for each bin (per participant)
+bin_breaks <- c(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9, 3.0)
+
+# Create an empty data frame to store localisation performances of each bin
+loc_det <- data.frame(ID = integer(),
+                      block = integer(),
+                      bin = integer(),
+                      loc_perf = double(),
+                      n_trials = integer(),
+                      stringsAsFactors = FALSE)
+
+# Loop through each ID
+for (i in unique(df_det$ID)) {
+  ID_df <- df_det %>%
+    filter(ID == i)  # Subset data for the current participant
+  
+  # Loop through each block
+  for (j in unique(ID_df$block)) {
+    block_df <- ID_df %>%
+      filter(block == j)  # Subset data for the current block
+  
+    # Bin trials of current block by response time to detection task
+    block_df$bin <- cut(block_df$resp1_t, breaks = bin_breaks)
+    
+    # Calculate localisation performance within each bin, add ID & block number
+    bin_loc_perf <- block_df %>%
+      group_by(bin) %>% 
+      summarise(loc_perf = sum(loca == "hit" | loca == "CR") / sum(loca %in% c("hit", "miss", "CR", "FA")),
+                n_trials = n())
+    bin_loc_perf$ID <- block_df$ID[1]
+    bin_loc_perf$block <- j
+    
+    # Append localisation performances of each bin to loc_det
+    loc_det <- rbind(loc_det, bin_loc_perf)
+    }}
+
+remove(ID_df, block_df, bin_loc_perf)
+
+# number all the bins & sort columns
+loc_det$bin_nr <- as.integer(loc_det$bin)
+loc_det <- subset(loc_det, select=c(ID, block, bin_nr, bin, n_trials, loc_perf))
+
+# calculate the number of trials in each bin 
+trial_counts <- loc_det %>%
+  group_by(bin_nr, bin) %>%
+  summarise(n_trials = sum(n_trials))
+
+# for every participant, average loc_perf across blocks within every bin
+av_det <- loc_det %>%
+  group_by(ID, bin_nr) %>%
+  summarise(av_loc_perf = mean(loc_perf)) 
+
+# average loc performance across participants within every bin
+av_se_det <- av_det %>%
+  group_by(bin_nr) %>%
+  summarise(bin_loc_perf = mean(av_loc_perf)*100,
+            se = sd(av_loc_perf)/sqrt(n())*100
+            ) 
+# add trial counts for every bin
+av_se_det <- merge(av_se_det, trial_counts, by.x = "bin_nr", by.y = "bin_nr")
+
+# plot av_loc_perf of every bin with error bars
+new_labels <- c("0.1-0.2s", "0.2-0.3s", "0.3-0.4s", "0.4-0.5s", "0.5-0.6s", "0.6-0.7s", "0.7-0.8s", "0.8-0.9s", "0.9-1.0s",
+                "1.0-1.1s", "1.1-1.2s", "1.2-1.3s", "1.3-1.4s", "1.4-1.5s", "1.5-1.6s", "1.6-1.7s", "1.7-1.8s", "1.8-1.9s", 
+                "1.9-2.0s", "2.0-2.1s", "2.1s-2.2s", "2.2-2.3s", "2.3-2.4s", "2.4-2.5s", "2.5-2.6s", "2.6-2.7s", "2.7-2.8s", 
+                "2.8-2.9s", "2.9-3.0s")
+ggplot(av_se_det, aes(x=bin_nr, y=bin_loc_perf))+
+  geom_line()+
+  geom_errorbar(aes(ymin=bin_loc_perf-se, ymax=bin_loc_perf+se), width=0.2)+
+  ggtitle("Localisation performance in detected trials by response time (n=39)")+
+  labs(x = "Response Time (to detection task)", y = "Localisation Performance [%]") +
+  theme_linedraw()+
+  scale_x_continuous(breaks = av_se_det$bin_nr, labels = new_labels) +
+  theme(axis.text.x = element_text(angle = 80, hjust = 1))
+
+# plot trial numbers per bin
+ggplot(av_se_det, aes(x = bin_nr, y = n_trials)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  geom_text(aes(label = n_trials), vjust = -0.5, size = 3) +  # Add text annotations
+  labs(x = "bin", y = "trials") +
+  ggtitle("number of trials by bin") +
+  scale_x_continuous(breaks = av_se_df$bin_nr, labels = new_labels) +
+  theme(axis.text.x = element_text(angle = 80, hjust = 1))
+
+```
+
+# 3.1) Detection performance by response time (per ID & block)
+
+```{r}
+# bin response times & calc. hit rate for each bin (per participant)
+bin_breaks <- c(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9, 3.0)
+
+# Create an empty data frame to store localisation performances of each bin
+det_df <- data.frame(ID = integer(),
+                     block = integer(),
+                     bin = integer(),
+                     det_perf = double(),
+                     n_trials = integer(),
+                     stringsAsFactors = FALSE)
+
+# Loop through each ID
+for (i in unique(df_filt$ID)) {
+  ID_df <- subset(df_filt, ID == i) # Subset data for the current participant
+  
+  # Loop through each block
+  for (j in unique(ID_df$block)) {
+    block_df <- subset(ID_df, block == j) # Subset data for the current block
+  
+    # Bin trials of current block by response time to detection task
+    block_df$bin <- cut(block_df$resp1_t, breaks = bin_breaks)
+    
+    # Calculate detection performance within each bin, add ID & block number
+    bin_det_perf <- block_df %>%
+      group_by(bin) %>% 
+      summarise(det_perf = sum(det %in% c("hitF1", "hitF2", "CR")) / sum(det %in% c("hitF1", "hitF2", "miss", "CR", "FA")),
+                n_trials = n())
+    bin_det_perf$ID <- block_df$ID[1]
+    bin_det_perf$block <- j
+    
+    # Append localisation performances of each bin to loc_df
+    det_df <- rbind(det_df, bin_det_perf)
+    }}
+
+remove(ID_df, block_df, bin_det_perf)
+
+# number all the bins & sort columns
+det_df$bin_nr <- as.integer(det_df$bin)
+det_df <- subset(det_df, select=c(ID, block, bin, bin_nr, n_trials, det_perf))
+
+# exclude all where det_perf = NaN
+det_df <- subset(det_df, det_df$det_perf != "NaN")
+
+# calculate the number of trials in each bin 
+trial_counts <- det_df %>%
+  group_by(bin, bin_nr) %>%
+  summarise(n_trials = sum(n_trials))
+
+# for every participant, average loc_perf across blocks within every bin
+av_df <- det_df %>%
+  group_by(ID, bin, bin_nr) %>%
+  summarise(av_det_perf = mean(det_perf)) 
+
+# average loc performance across participants within every bin
+av_se_df <- av_df %>%
+  group_by(bin, bin_nr) %>%
+  summarise(bin_det_perf = mean(av_det_perf)*100,
+            se = sd(av_det_perf)/sqrt(n())*100
+            ) 
+# add trial counts for every bin
+av_se_df <- merge(av_se_df, trial_counts, by = c("bin", "bin_nr")) 
+
+# plot av_det_perf of every bin with error bars
+new_labels <- c("0.1-0.2s", "0.2-0.3s", "0.3-0.4s", "0.4-0.5s", "0.5-0.6s", "0.6-0.7s", "0.7-0.8s", "0.8-0.9s", "0.9-1.0s",
+                "1.0-1.1s", "1.1-1.2s", "1.2-1.3s", "1.3-1.4s", "1.4-1.5s", "1.5-1.6s", "1.6-1.7s", "1.7-1.8s", "1.8-1.9s", 
+                "1.9-2.0s", "2.0-2.1s", "2.1s-2.2s", "2.2-2.3s", "2.3-2.4s", "2.4-2.5s", "2.5-2.6s", "2.6-2.7s", "2.7-2.8s", "2.8-2.9s",
+                "2.9-3.0s")
+
+ggplot(av_se_df, aes(x=bin_nr, y=bin_det_perf))+
+  geom_line()+
+  geom_errorbar(aes(ymin=bin_det_perf-se, ymax=bin_det_perf+se), width=0.2)+
+  ggtitle("Detection performance by response time (n=38)")+
+  labs(x = "Response Time (to detection task)", y = "Detection Performance [%]") +
+  theme_linedraw()+
+  scale_x_continuous(breaks = av_se_df$bin_nr, labels = new_labels) +
+  theme(axis.text.x = element_text(angle = 80, hjust = 1)) +
+  ylim(25, 100)
+
+# plot trial numbers per bin
+ggplot(av_se_df, aes(x = bin_nr, y = n_trials)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  geom_text(aes(label = n_trials), vjust = -0.5, size = 3) +  # Add text annotations
+  labs(x = "bin", y = "trials") +
+  theme_linedraw() +
+  ggtitle("number of trials by bin") +
+  scale_x_continuous(breaks = av_se_df$bin_nr, labels = new_labels) +
+  theme(axis.text.x = element_text(angle = 80, hjust = 1)) 
+
+# plot fitted line
+av_se_fit <- av_se_df[1:16,]
+# bin nr. 1: 99.62 +/- 0.4 %
+# bin nr. 16: 96.78 +/- 1.7 %
+
+labels <- av_se_fit %>%
+  mutate(plot_label = sprintf("%.2f %%\n(± %.1f %%)", bin_det_perf, se))
+
+
+ggplot(av_se_fit, aes(x=bin_nr, y=bin_det_perf))+
+  geom_line()+
+  geom_errorbar(aes(ymin=bin_det_perf-se, ymax=bin_det_perf+se), width=0.2)+
+  ggtitle("Detection performance by response time (n=38)")+
+  labs(x = "Response Time (to detection task)", y = "Detection Performance [%]") +
+  theme_linedraw()+
+  scale_x_continuous(breaks = av_se_df$bin_nr, labels = new_labels) +
+  theme(axis.text.x = element_text(angle = 80, hjust = 1)) + 
+  ylim(25, 100) +
+  geom_smooth(method=lm, se=FALSE) +
+  geom_text(data = labels[c(1,16),], aes(label = plot_label),
+            nudge_y = -7, size = 3)
+  
+
+
+```
+
+```{r}
+paired_df <- av_df %>%
+  group_by(ID) %>%
+  filter(all(c(1, 16) %in% bin_nr)) %>%
+  ungroup()
+
+first_bin <- subset(paired_df, bin_nr==1)$av_det_perf
+last_bin <- subset(paired_df, bin_nr==16)$av_det_perf
+performance_diff <- last_bin - first_bin
+
+# normality
+shapiro.test(performance_diff)
+
+# Paired-sample t-test 
+wilcox_test_result <- wilcox.test(performance_diff)
+print(wilcox_test_result)
+
+```
+
+# 3.2) Detection performance by response time (per ID, blocks pooled)
+
+```{r}
+# bin response times & calc. hit rate for each bin (per participant)
+bin_breaks <- c(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9, 3.0)
+
+# Create an empty data frame to store localisation performances of each bin
+det_df <- data.frame(ID = integer(),
+                     block = integer(),
+                     bin = integer(),
+                     det_perf = double(),
+                     n_trials = integer(),
+                     stringsAsFactors = FALSE)
+
+# Loop through each ID
+for (i in unique(df_filt$ID)) {
+  ID_df <- subset(df_filt, ID == i) # Subset data for the current participant
+  
+  # Bin trials of current block by response time to detection task
+    ID_df$bin <- cut(ID_df$resp1_t, breaks = bin_breaks)
+    
+    # Calculate detection performance within each bin, add ID & block number
+    bin_det_perf <- ID_df %>%
+      group_by(bin) %>% 
+      summarise(det_perf = sum(det %in% c("hitF1", "hitF2", "CR")) / sum(det %in% c("hitF1", "hitF2", "miss", "CR", "FA")),
+                n_trials = n())
+    
+    # add ID to bin_det_perf
+    bin_det_perf$ID <- ID_df$ID[1]
+    
+    # append det_performances of each bin to det_df
+    det_df <- rbind(det_df, bin_det_perf)
+    }
+
+remove(ID_df, bin_det_perf)
+
+# number all the bins & sort columns
+det_df$bin_nr <- as.integer(det_df$bin)
+det_df <- subset(det_df, select=c(ID, bin, bin_nr, n_trials, det_perf))
+
+# exclude all where det_perf = NaN
+det_df <- subset(det_df, det_df$det_perf != "NaN")
+
+# summarise n_trials of bins across IDs
+trial_counts <- det_df %>%
+  group_by(bin, bin_nr) %>%
+  summarise(n_trials = sum(n_trials))
+
+# average det performance of every bin across IDs
+av_det_df <- det_df %>%
+  group_by(bin_nr) %>%
+  summarise(bin_det_perf = mean(det_perf)*100,
+            se = sd(det_perf)/sqrt(n())*100
+            ) 
+
+# add trial counts for every bin
+av_det_df <- cbind(av_det_df, subset(trial_counts, select=c("bin", "n_trials")))
+
+# plot av_det_perf of every bin with error bars
+new_labels <- c("0.1-0.2s", "0.2-0.3s", "0.3-0.4s", "0.4-0.5s", "0.5-0.6s", "0.6-0.7s", "0.7-0.8s", "0.8-0.9s", "0.9-1.0s",
+                "1.0-1.1s", "1.1-1.2s", "1.2-1.3s", "1.3-1.4s", "1.4-1.5s", "1.5-1.6s", "1.6-1.7s", "1.7-1.8s", "1.8-1.9s", 
+                "1.9-2.0s", "2.0-2.1s", "2.1s-2.2s", "2.2-2.3s", "2.3-2.4s", "2.4-2.5s", "2.5-2.6s", "2.6-2.7s", "2.7-2.8s", "2.8-2.9s",
+                "2.9-3.0s")
+
+ggplot(av_det_df, aes(x=bin_nr, y=bin_det_perf))+
+  geom_line()+
+  geom_errorbar(aes(ymin=bin_det_perf-se, ymax=bin_det_perf+se), width=0.2)+
+  ggtitle("Detection performance by response time (n=38)")+
+  labs(x = "Response Time (to detection task)", y = "Detection Performance [%]") +
+  theme_linedraw()+
+  scale_x_continuous(breaks = av_det_df$bin_nr, labels = new_labels) +
+  theme(axis.text.x = element_text(angle = 80, hjust = 1)) +
+  ylim(25, 100)
+
+# plot trial numbers per bin
+ggplot(av_det_df, aes(x = bin_nr, y = n_trials)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  geom_text(aes(label = n_trials), vjust = -0.5, size = 3) +  # Add text annotations
+  labs(x = "bin", y = "trials") +
+  theme_linedraw() +
+  ggtitle("number of trials by bin") +
+  scale_x_continuous(breaks = av_det_df$bin_nr, labels = new_labels) +
+  theme(axis.text.x = element_text(angle = 80, hjust = 1)) 
+
+# plot fitted line
+av_det_fit <- av_det_df[1:16,]
+
+labels <- av_det_fit %>%
+  mutate(plot_label = sprintf("%.2f %%\n(± %.1f %%)", bin_det_perf, se))
+
+ggplot(av_det_fit, aes(x=bin_nr, y=bin_det_perf))+
+  geom_line()+
+  geom_errorbar(aes(ymin=bin_det_perf-se, ymax=bin_det_perf+se), width=0.2)+
+  ggtitle("Detection performance by response time (n=38)")+
+  labs(x = "Response Time (to detection task)", y = "Detection Performance [%]") +
+  theme_linedraw()+
+  scale_x_continuous(breaks = av_det_df$bin_nr, labels = new_labels) +
+  theme(axis.text.x = element_text(angle = 80, hjust = 1)) + 
+  ylim(25, 100) +
+  geom_smooth(method=lm, se=FALSE) +
+  geom_text(data = labels[c(1,16),], aes(label = plot_label),
+            nudge_y = -7, size = 3)
+
+# compare det_perf of bin nr. 1 (99.57 ± 0.4%) and nr. 16 (96.77 ± 1.5%)
+bin_pairs <- det_df %>%
+  group_by(ID) %>%
+  filter(all(c(1, 16) %in% bin_nr))
+bin1 <- subset(bin_pairs, bin_nr==1)$det_perf
+bin16 <- subset(bin_pairs, bin_nr==16)$det_perf
+diff <- bin1 - bin16
+shapiro.test(diff)
+
+res.wilcox <- wilcox.test(bin1, bin16, paired = TRUE)
+
+
+```
+

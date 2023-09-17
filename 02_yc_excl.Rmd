@@ -1,0 +1,107 @@
+---
+title: "yc_excl.Rmd"
+author: "Lena Lange"
+date: "2023-04-04"
+output: html_document
+---
+
+Calculate false alarm rate and detection rates of F1 & F2 (in anatomical position) per block
+Exclude blocks based on FAR/DRs/differnce in DRs
+
+#### Packages, settings, load data frame
+
+```{r setup, include=FALSE}
+
+.libPaths("/data/pt_02438/lena/R/") # set path to save packages
+
+library(tidyverse)
+
+options(scipen = 999) # turn off e notation
+
+data_dir <- '/data/pt_02438/numbtouch_neglect/young_controls/yc_behav/'
+
+behav_data <- paste(data_dir, 'yc_prepro.csv', sep = '')
+df_valid <- read.table(behav_data, header = TRUE, sep = ",", fill = TRUE, stringsAsFactors = FALSE)
+
+```
+
+#### Calculate detection rates & false alarm rate of every block
+
+```{r}
+
+# create empty columns
+df_valid <- df_valid %>% 
+  mutate(
+  det_rate_F1_anat = ('NaN'),
+  det_rate_F2_anat = ('NaN'),
+  det_rate_diff_anat = ('NaN'),
+  fa_rate_overall = ('NaN')
+)
+
+for (i in unique(df_valid$ID)) { # iterate over participants
+  df_ID <- subset(df_valid, ID==i)
+  
+  for (j in unique(df_valid$block)) {  # iterate over blocks of current participant
+    df_block <- subset(df_ID, block==j & block_type==1) # choose only anatomical miniblocks
+    
+    # calculations
+    det_rate_F1 = sum(df_block$det=="hitF1") / sum(df_block$stim==1)
+    det_rate_F2 = sum(df_block$det=="hitF2") / sum(df_block$stim==2)
+    fa_rate = sum(df_block$det=="FA") / sum(df_block$stim==0)
+    diff = abs(det_rate_F1 - det_rate_F2)
+    
+    # write into corresponding df_valid columns (for ID=i and block=j)
+    df_valid <- df_valid %>%
+      mutate(
+        det_rate_F1_anat = ifelse(((ID==i) & (block==j)), det_rate_F1, det_rate_F1_anat),
+        det_rate_F2_anat = ifelse(((ID==i) & (block==j)), det_rate_F2, det_rate_F2_anat),
+        det_rate_diff_anat = ifelse(((ID==i) & (block==j)), diff,  det_rate_diff_anat),
+        fa_rate_overall = ifelse(((ID==i) & (block==j)), fa_rate, fa_rate_overall),
+      )
+  }
+}
+
+```
+
+#### Exclude blocks when: FAR > 40%, detection rate difference > 40%, detection rate F1/F2 < 20% or >80%
+
+```{r}
+# create column for every exclusion criterion with 1s & 0s & combine into 1 exclusion column ("Ex")
+df_valid$FA_ex <- as.integer(df_valid$fa_rate_overall > 0.40)
+df_valid$DR_ex_l <- as.integer(df_valid$det_rate_F1_anat < 0.2 | df_valid$det_rate_F2_anat < 0.2)
+df_valid$DR_ex_h <- as.integer(df_valid$det_rate_F1_anat > 0.8 | df_valid$det_rate_F2_anat > 0.8)
+df_valid$DR_diff_ex <- as.integer(df_valid$det_rate_diff_anat > 0.4)
+
+df_valid$Ex <- as.integer(df_valid$FA_ex | df_valid$DR_ex_l | df_valid$DR_ex_h | df_valid$DR_diff_ex)
+
+# exclude all blocks where Ex=1 & delete exclusion columns
+df_prepro <- subset(df_valid, Ex==0, select=-c(FA_ex, DR_ex_h, DR_ex_l, DR_diff_ex, Ex))
+
+# Export pre-processed data frame as .csv
+fname <- file.path(data_dir, "yc_behav_excl.csv")
+write.csv(df_prepro, fname, row.names = FALSE)
+
+unique(df_prepro$ID)
+# for yc08 no blocks survived
+
+```
+
+#### Descriptive statistics:
+
+```{r}
+### demo behav analysis
+demo <- aggregate(age~ID + gender, data=df_prepro, mean)
+summary(demo$age)
+sd(demo$age)
+sum(demo$gender=='F' | demo$gender=='f')
+sum(demo$gender=='M' | demo$gender=='m')
+
+### demo eeg analysis
+demo <- subset(demo, demo$ID!="6")
+summary(demo$age)
+sd(demo$age)
+sum(demo$gender=='F' | demo$gender=='f')
+sum(demo$gender=='M' | demo$gender=='m')
+
+
+```

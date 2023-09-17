@@ -1,0 +1,909 @@
+---
+title: "detection_analysis"
+author: "Lena Lange"
+date: "2023-09-12"
+output: html_document
+---
+
+#### Packages, settings & data frames
+
+```{r setup, include=FALSE}
+
+.libPaths("/data/pt_02438/lena/R/") # set path to save packages
+library(tidyverse)
+library(ggpubr)
+library(rstatix) # identify_outliers(), ANOVA
+library(car) # levene test
+library(WRS2) # robust anova (Wilcox)
+library(lme4) # GLMM
+
+options(scipen = 999) # turn off e notation
+
+# set paths & load data
+data_dir <- '/data/pt_02438/numbtouch_neglect/young_controls/yc_behav/'
+plot_dir <- '/data/pt_02438/numbtouch_neglect/young_controls/yc_behav/plots/'
+
+# load data frames for detection performance (from 03_yc_det-perf.Rmd)
+fname <- file.path(data_dir, "yc_detperf_av.csv")
+df_det_av <- read.table(fname, header = TRUE, sep = ",", fill = TRUE, stringsAsFactors = FALSE) 
+df_det_av %>%
+  mutate(position = as.factor(position),
+         finger = as.factor(finger),
+         performance = as.numeric(performance))
+
+fname <- file.path(data_dir, "yc_detperf_sum.csv")
+df_det_sum <- read.table(fname, header = TRUE, sep = ",", fill = TRUE, stringsAsFactors = FALSE) 
+df_det_sum %>%
+  mutate(position = as.factor(position),
+         finger = as.factor(finger),
+         performance = as.numeric(performance))
+
+# load data frames for detection sdt measures (from 04_yc_det-sdt.Rmd)
+fname <- file.path(data_dir, "yc_sdt-yn_av.csv")
+sdt_av <- read.table(fname, header = TRUE, sep = ",", fill = TRUE, stringsAsFactors = FALSE) 
+sdt_av %>%
+  mutate(position = as.factor(position),
+         finger = as.factor(finger),
+         d_prime = as.numeric(d_prime),
+         c_value = as.numeric(c_value))
+
+fname <- file.path(data_dir, "yc_sdt-yn_sum.csv")
+sdt_sum <- read.table(fname, header = TRUE, sep = ",", fill = TRUE, stringsAsFactors = FALSE) 
+sdt_sum %>%
+  mutate(position = as.factor(position),
+         finger = as.factor(finger),
+         d_prime = as.numeric(d_prime),
+         c_value = as.numeric(c_value))
+
+```
+
+### Plot F1 vs F2 detection performance
+
+```{r}
+palette <- c("#F8766D", "#0072C1", "#EFC000")
+
+# box plots (subject averages av and pooled average sum)
+det_av <- ggplot(subset(df_det_av, finger!="both"), aes(x=finger, y=performance*100, fill=position))+
+  geom_boxplot(show.legend = FALSE)+
+  labs(title="", x ="", y = "detection performance (%)")+
+  scale_x_discrete(breaks=c("both", "F1", "F2"),
+                   labels=c("F1 + F2", "F1", "F2"))+
+  theme_linedraw()+
+  theme(axis.text.x=element_text(size=12))+
+  scale_fill_manual(values=palette, labels=c("overall", "anatomical", "crossed"))+
+  ylim(0,100)
+
+det_sum <- ggplot(subset(df_det_sum, finger!="both"), aes(x=finger, y=performance*100, fill=position))+
+  geom_boxplot(show.legend = FALSE)+
+  labs(title="", x ="", y = "detection performance (%)")+
+  scale_x_discrete(breaks=c("both", "F1", "F2"),
+                   labels=c("F1 + F2", "F1", "F2"))+
+  theme_linedraw()+
+  theme(axis.text.x=element_text(size=12))+
+  scale_fill_manual(values=palette, labels=c("overall", "anatomical", "crossed"))+
+  ylim(0,100)
+
+fig <- ggarrange(det_av, det_sum,
+                 labels = c("A", "B"),
+                 ncol = 2, nrow = 1)
+
+annotate_figure(fig,
+                top = text_grob("Detection performance by finger and hand position", size = 14))
+
+# #pairwise comparisons
+# df_pairplot_av <- subset(df_det_av, position!="all" & finger=="both", select=c(ID, performance, position))
+# df_pairplot_av$performance <- df_pairplot_av$performance*100
+# 
+# ggpaired(df_pairplot_av, x = "position", y = "performance",
+#          color = "position", line.color = "gray", line.size = 0.4, palette = "jco",
+#          ylab = "detection performance [%]", xlab = FALSE, title="detection performance")+
+#   stat_compare_means(paired = TRUE)+
+#   scale_x_discrete(labels = c("anatomical", "crossed"))+
+#   theme_linedraw()+
+#   ylim(35, 70)
+
+```
+
+##### Stats for within-subject averaged data: compare means between positions for either finger
+
+(no significant differences)
+
+```{r}
+
+stat_df <- subset(df_det_av, position!="all" & finger!="both")
+
+# test normality of distribution of performance score differences between anatomical and crossed:
+
+diff_F1 <- with(subset(stat_df, finger=="F1"), performance[position=="anat"] - performance[position=="cross"])
+shapiro.test(diff_F1)
+
+diff_F2 <- with(subset(stat_df, finger=="F2"), performance[position=="anat"] - performance[position=="cross"])
+shapiro.test(diff_F2) 
+
+# t tests:
+res.f1 <- t.test(performance ~ position, data=subset(stat_df, finger=="F1"), paired = TRUE, alternative = "two.sided")
+cat("t-test F1 (av):\n")
+cat("Estimated mean difference:", res.f1$estimate, "\n")
+cat("p-value:", res.f1$p.value, "\n\n")
+
+res.f2 <-t.test(performance ~ position, data=subset(stat_df, finger=="F2"), paired = TRUE, alternative = "two.sided")
+cat("t-test F2 (av):\n")
+cat("Estimated mean difference:", res.f2$estimate, "\n")
+cat("p-value:", res.f2$p.value, "\n\n")
+
+```
+
+##### Stats for pooled data: compare means between positions for either finger
+
+(sign. difference between positions for F2, no sign. difference after excluding outliers)
+
+```{r}
+stat_df <- subset(df_det_sum, position!="all" & finger!="both")
+
+# test normality of distribution of performance score differences between anatomical and crossed:
+
+diff_F1 <- with(subset(stat_df, finger=="F1"), performance[position=="anat"] - performance[position=="cross"])
+shapiro.test(diff_F1)
+
+diff_F2 <- with(subset(stat_df, finger=="F2"), performance[position=="anat"] - performance[position=="cross"])
+shapiro.test(diff_F2) 
+
+# t tests:
+res.f1 <- t.test(performance ~ position, data=subset(stat_df, finger=="F1"), paired = TRUE, alternative = "two.sided")
+cat("t-test F1 (sum):\n")
+cat("Estimated mean difference:", res.f1$estimate, "\n")
+cat("p-value:", res.f1$p.value, "\n\n")
+
+res.f2 <-t.test(performance ~ position, data=subset(stat_df, finger=="F2"), paired = TRUE, alternative = "two.sided")
+cat("t-test F2 (sum):\n")
+cat("Estimated mean difference:", res.f2$estimate, "\n")
+cat("p-value:", res.f2$p.value, "\n\n")
+
+
+
+### Repeat stats for F2 without outliers
+
+# identify outliers (by 1.5*IQR rule):
+
+outliers <- subset(stat_df, finger=="F2") %>%
+  group_by(position) %>%
+  identify_outliers(performance) 
+# >>> ID12/block4/cross; ID14/block1/cross
+
+# filter outliers (+ corresponding data points in opposite hand position):
+
+f2_filt <- subset(stat_df, finger=="F2") %>%
+  filter(!(ID == 12 & block == 4) & !(ID == 14 & block == 1))
+  
+res.f2_filt <-t.test(performance ~ position, data=f2_filt,
+                     paired = TRUE, alternative = "two.sided")
+cat("t-test F2 (sum, filtered):\n")
+cat("Estimated mean difference:", res.f2_filt$estimate, "\n")
+cat("p-value:", res.f2_filt$p.value, "\n\n")
+
+
+```
+
+##### Repeated measures two-way ANOVA (finger x position) for within-subject averaged data
+
+for more details see: <https://www.datanovia.com/en/lessons/repeated-measures-anova-in-r/#two-way-repeated-measures-anova>
+
+```{r}
+palette <- c("#0072C1", "#EFC000")
+
+av_det_fingers <- subset(df_det_av, position!="all" & finger!="both", select = c(ID, finger, position, performance))
+
+# summary stats
+av_det_fingers %>%
+  group_by(position, finger) %>% 
+  get_summary_stats(performance, type = "mean_sd")
+
+# visualize
+ggboxplot(av_det_fingers, 
+          x = "finger", y = "performance",
+          color = "position", palette = palette
+  )
+
+# check outliers
+av_det_fingers %>%
+  group_by(position, finger) %>%
+  identify_outliers(performance)
+
+# check normality
+av_det_fingers %>%
+  group_by(position, finger) %>%
+  shapiro_test(performance) # >> F1/cross not normally distributed
+
+ggqqplot(av_det_fingers, "performance", ggtheme = theme_bw()) +
+  facet_grid(finger ~ position, labeller = "label_both")
+
+# check homoscedasticity
+ggplot(av_det_fingers, aes(x = position, y = performance, color = finger)) +
+  geom_point() +
+  labs(title = "Scatterplot of Performance by Finger and Position",
+       x = "Position",
+       y = "Performance") 
+
+leveneTest(performance ~ finger * position, data = av_det_fingers) # >>> p > 0.05, assumption met
+
+# compute ANOVA
+av.aov <- anova_test(
+  data = av_det_fingers, dv = performance, wid = ID,
+  within = c(position, finger)
+  )
+get_anova_table(av.aov)
+
+```
+
+##### GLMM (finger x position) for pooled data
+
+```{r}
+palette <- c("#0072C1", "#EFC000")
+
+sum_det_fingers <- subset(df_det_sum, position!="all" & finger!="both", select = c(ID, block, finger, position, performance))
+
+# summary stats
+sum_det_fingers %>%
+  group_by(position, finger) %>% 
+  get_summary_stats(performance, type = "mean_sd")
+
+# visualize
+ggboxplot(sum_det_fingers, 
+          x = "finger", y = "performance",
+          color = "position", palette = palette
+  )
+
+# check outliers: ID12/F2/cross, ID14/F2/cross
+sum_det_fingers %>%
+  group_by(position, finger) %>%
+  identify_outliers(performance)
+
+# check normality
+sum_det_fingers %>%
+  group_by(position, finger) %>%
+  shapiro_test(performance) # >> F2/anat not normally distributed
+
+ggqqplot(sum_det_fingers, "performance", ggtheme = theme_bw()) +
+  facet_grid(finger ~ position, labeller = "label_both")
+
+# check homoscedasticity: p < 0.05, assumption violated
+ggplot(sum_det_fingers, aes(x = position, y = performance, color = finger)) +
+  geom_point() +
+  labs(title = "Scatterplot of Performance by Finger and Position",
+       x = "Position",
+       y = "Performance") 
+
+leveneTest(performance ~ finger * position, data = sum_det_fingers) 
+
+# transform data and check variances again: still violated 
+sum_det_fingers$sqrt_performance <- sqrt(sum_det_fingers$performance)
+sum_det_fingers$log_performance <- log(sum_det_fingers$performance)
+leveneTest(sqrt_performance ~ finger * position, data = sum_det_fingers) 
+leveneTest(log_performance ~ finger * position, data = sum_det_fingers)
+
+
+# compute repeated measures 2-way ANOVA (and ignore heteroscedasticity lol)
+sum_det_fingers$identifier <- paste(sum_det_fingers$ID, sum_det_fingers$block, sep = "_")
+
+res.aov <- anova_test(
+  data = sum_det_fingers, dv = performance, wid = identifier,
+  within = c(position, finger)
+  )
+get_anova_table(res.aov)
+
+
+# conduct seperate robust Welch's ANOVA for each factor and their interaction
+result_finger <- oneway.test(performance ~ finger, data = sum_det_fingers, var.equal = FALSE)
+result_position <- oneway.test(performance ~ position, data = sum_det_fingers, var.equal = FALSE)
+result_interaction <- aov(performance ~ finger * position, data = sum_det_fingers)
+
+# extract p-values
+p_finger <- result_finger$p.value
+p_position <- result_position$p.value
+p_interaction <- summary(result_interaction)[[1]]$`Pr(>F)`[1]
+
+# bonferroni correct p-values
+alpha <- 0.05
+num_comparisons <- 3
+alpha_adjusted <- alpha / num_comparisons
+p_finger_corr <- p.adjust(p_finger, method = "bonferroni", n=num_comparisons)
+p_position_corr <- p.adjust(p_position, method = "bonferroni", n=num_comparisons)
+p_interaction_corr <- p.adjust(p_interaction, method = "bonferroni", n=num_comparisons)
+
+cat("Number of comparisons:", num_comparisons, "\n")
+cat("Adjusted alpha level:", alpha_adjusted, "\n")
+cat("Corrected p-value for Factor1 (finger):", p_finger_corr, "\n")
+cat("Corrected p-value for Factor2 (position):", p_position_corr, "\n")
+cat("Corrected p-value for Interaction:", p_interaction_corr, "\n")
+
+
+# use a GLMM (Generaliied Linear Mixed Model)
+model <- lmer(performance ~ finger * position + (1|identifier), data = sum_det_fingers)
+summary(model)
+
+
+```
+
+### Plot F1 vs F2 detection sensitivity d'
+
+```{r}
+palette <- c("#F8766D", "#0072C1", "#EFC000")
+
+# across-subjects averages
+d_av <- ggplot(subset(sdt_av, finger!="both"), aes(x=finger, y=d_prime, fill=position))+
+  geom_boxplot(show.legend = FALSE)+
+  labs(title="", x ="", y = "d'")+
+  scale_fill_discrete(labels=c("overall", "anatomical", "crossed"))+
+  scale_x_discrete(breaks=c("F1", "F2"),
+                   labels=c("F1", "F2"))+
+  theme_linedraw()+
+  theme(axis.text.x = element_text(size = 12))+
+  scale_fill_manual(values = palette)+
+  ylim(-1,3)
+
+# across-blocks averages
+d_sum <- ggplot(subset(sdt_sum, finger!="both"), aes(x=finger, y=d_prime, fill=position))+
+  geom_boxplot(show.legend = FALSE)+
+  labs(title="", x ="", y = "d'")+
+  scale_fill_discrete(labels=c("overall", "anatomical", "crossed"))+
+  scale_x_discrete(breaks=c("F1", "F2"),
+                   labels=c("F1", "F2"))+
+  theme_linedraw()+
+  theme(axis.text.x = element_text(size = 12))+
+  scale_fill_manual(values = palette)+
+  ylim(-1,3)
+
+fig <- ggarrange(d_av, d_sum,
+                 labels = c("C", "D"),
+                 ncol = 2, nrow = 1)
+
+annotate_figure(fig,
+                top = text_grob("Detection sensitivity (d') by finger and hand position", size = 14))
+
+```
+
+##### Stats for within-subject averaged data: compare means between positions for either finger
+
+(no significant differences)
+
+```{r}
+
+stat_df <- subset(sdt_av, position!="all" & finger!="both")
+
+# test normality of distribution of d_prime differences between anatomical and crossed:
+diff_F1 <- with(subset(stat_df, finger=="F1"), d_prime[position=="anat"] - d_prime[position=="cross"])
+shapiro.test(diff_F1) 
+
+diff_F2 <- with(subset(stat_df, finger=="F2"), d_prime[position=="anat"] - d_prime[position=="cross"])
+shapiro.test(diff_F2) 
+
+# t tests:
+res.f1 <- t.test(d_prime ~ position, data=subset(stat_df, finger=="F1"), paired = TRUE, alternative = "two.sided")
+cat("t-test F1 (av):\n")
+cat("Estimated mean difference (d'):", res.f1$estimate, "\n")
+cat("p-value:", res.f1$p.value, "\n\n")
+
+res.f2 <-t.test(d_prime ~ position, data=subset(stat_df, finger=="F2"), paired = TRUE, alternative = "two.sided")
+cat("t-test F2 (av):\n")
+cat("Estimated mean difference (d'):", res.f2$estimate, "\n")
+cat("p-value:", res.f2$p.value, "\n\n")
+
+```
+
+##### Stats for pooled data: compare means between positions for either finger
+
+no significant differences
+
+```{r}
+
+stat_df <- subset(sdt_sum, position!="all" & finger!="both")
+
+# test normality of distribution of d_prime differences between anatomical and crossed:
+diff_F1 <- with(subset(stat_df, finger=="F1"), d_prime[position=="anat"] - d_prime[position=="cross"])
+shapiro.test(diff_F1)
+
+diff_F2 <- with(subset(stat_df, finger=="F2"), d_prime[position=="anat"] - d_prime[position=="cross"])
+shapiro.test(diff_F2) 
+
+# t tests:
+res.f1 <- t.test(d_prime ~ position, data=subset(stat_df, finger=="F1"), paired = TRUE, alternative = "two.sided")
+cat("t-test F1 (sum):\n")
+cat("Estimated mean difference (d'):", res.f1$estimate, "\n")
+cat("p-value:", res.f1$p.value, "\n\n")
+
+res.f2 <-t.test(d_prime ~ position, data=subset(stat_df, finger=="F2"), paired = TRUE, alternative = "two.sided")
+cat("t-test F2 (sum):\n")
+cat("Estimated mean difference (d'):", res.f2$estimate, "\n")
+cat("p-value:", res.f2$p.value, "\n\n")
+
+```
+
+##### Repeated measures two-way ANOVA (finger x position) for within-subject averaged data
+
+```{r}
+palette <- c("#0072C1", "#EFC000")
+
+av_dprime_fingers <- subset(sdt_av, position!="all" & finger!="both", select = c(ID, finger, position, d_prime))
+
+# summary stats
+av_dprime_fingers %>%
+  group_by(position, finger) %>% 
+  get_summary_stats(d_prime, type = "mean_sd")
+
+# visualize
+ggboxplot(av_dprime_fingers, 
+          x = "finger", y = "d_prime",
+          color = "position", palette = palette
+  )
+
+# check outliers
+av_dprime_fingers %>%
+  group_by(position, finger) %>%
+  identify_outliers(d_prime) 
+
+# check normality
+av_dprime_fingers %>%
+  group_by(position, finger) %>%
+  shapiro_test(d_prime) # F1/cross not normal
+
+ggqqplot(av_dprime_fingers, "d_prime", ggtheme = theme_bw()) +
+  facet_grid(finger ~ position, labeller = "label_both")
+
+# check homoscedasticity
+ggplot(av_dprime_fingers, aes(x = position, y = d_prime, color = finger)) +
+  geom_point() +
+  labs(title = "Scatterplot of d' by Finger and Position",
+       x = "Position",
+       y = "d'") 
+
+leveneTest(d_prime ~ finger * position, data = av_dprime_fingers) # p > 0.05, assumption met
+
+# compute ANOVA
+res.aov <- anova_test(
+  data = df_dprime_fingers, dv = d_prime, wid = ID,
+  within = c(position, finger)
+  )
+get_anova_table(res.aov)
+
+```
+
+##### Repeated measures two-way ANOVA (finger x position) for pooled data
+
+```{r}
+palette <- c("#0072C1", "#EFC000")
+
+sum_dprime_fingers <- subset(sdt_sum, position!="all" & finger!="both", select = c(ID, block, finger, position, d_prime))
+
+# summary stats
+sum_dprime_fingers %>%
+  group_by(position, finger) %>% 
+  get_summary_stats(d_prime, type = "mean_sd")
+
+# visualize
+ggboxplot(sum_dprime_fingers, 
+          x = "finger", y = "d_prime",
+          color = "position", palette = palette
+  )
+
+# check outliers: ID12/block4/F2/cross, ID14/block1/F2/cross
+sum_dprime_fingers %>%
+  group_by(position, finger) %>%
+  identify_outliers(d_prime) 
+
+# check normality: F2/anat not normal
+sum_dprime_fingers %>%
+  group_by(position, finger) %>%
+  shapiro_test(d_prime) 
+
+ggqqplot(sum_dprime_fingers, "d_prime", ggtheme = theme_bw()) +
+  facet_grid(finger ~ position, labeller = "label_both")
+
+# check homoscedasticity: p > 0.05, assumption met
+ggplot(sum_dprime_fingers, aes(x = position, y = d_prime, color = finger)) +
+  geom_point() +
+  labs(title = "Scatterplot of d' by Finger and Position",
+       x = "Position",
+       y = "d'") 
+
+leveneTest(d_prime ~ finger * position, data = sum_dprime_fingers) 
+
+# compute ANOVA:
+# combine ID and block into a single identifier column
+sum_dprime_fingers$identifier <- paste(sum_dprime_fingers$ID, sum_dprime_fingers$block, sep = "_")
+
+res.aov <- anova_test(
+  data = sum_dprime_fingers, dv = d_prime, wid = identifier,
+  within = c(position, finger)
+  )
+get_anova_table(res.aov)
+
+```
+
+### Plot F1 vs F2 detection response bias c
+
+```{r}
+palette <- c("#F8766D", "#0072C1", "#EFC000")
+
+# across-subjects averages
+c_av <- ggplot(subset(sdt_av, finger!="both"), aes(x=finger, y=c_value, fill=position))+
+  geom_boxplot(show.legend = FALSE)+
+  labs(title="", x ="", y = "c")+
+  scale_fill_discrete(labels=c("overall", "anatomical", "crossed"))+
+  scale_x_discrete(breaks=c("F1", "F2"),
+                   labels=c("F1", "F2"))+
+  theme_linedraw()+
+  theme(axis.text.x = element_text(size = 12))+
+  scale_fill_manual(values = palette)+
+  ylim(-0.75, 1.5)
+
+# across-blocks averages
+c_sum <- ggplot(subset(sdt_sum, finger!="both"), aes(x=finger, y=c_value, fill=position))+
+  geom_boxplot(show.legend = FALSE)+
+  labs(title="", x ="", y = "c")+
+  scale_fill_discrete(labels=c("overall", "anatomical", "crossed"))+
+  scale_x_discrete(breaks=c("F1", "F2"),
+                   labels=c("F1", "F2"))+
+  theme_linedraw()+
+  theme(axis.text.x = element_text(size = 12))+
+  scale_fill_manual(values = palette)+
+  ylim(-0.75, 1.5)
+
+fig <- ggarrange(c_av, c_sum,
+                 labels = c("E", "F"),
+                 ncol = 2, nrow = 1)
+
+annotate_figure(fig,
+                top = text_grob("Response bias (c) by finger and hand position", size = 14))
+
+```
+
+##### Stats for within-subject averaged data: compare means between positions for either finger
+
+(no significant differences)
+
+```{r}
+
+stat_df <- subset(sdt_av, position!="all" & finger!="both")
+
+# test normality of distribution of c_value differences between anatomical and crossed:
+diff_F1 <- with(subset(stat_df, finger=="F1"), c_value[position=="anat"] - c_value[position=="cross"])
+shapiro.test(diff_F1) 
+
+diff_F2 <- with(subset(stat_df, finger=="F2"), c_value[position=="anat"] - c_value[position=="cross"])
+shapiro.test(diff_F2) 
+
+# t tests:
+res.f1 <- t.test(c_value ~ position, data=subset(stat_df, finger=="F1"), paired = TRUE, alternative = "two.sided")
+cat("t-test F1 (av):\n")
+cat("Estimated mean difference (c):", res.f1$estimate, "\n")
+cat("p-value:", res.f1$p.value, "\n\n")
+
+res.f2 <-t.test(c_value ~ position, data=subset(stat_df, finger=="F2"), paired = TRUE, alternative = "two.sided")
+cat("t-test F2 (av):\n")
+cat("Estimated mean difference (c):", res.f2$estimate, "\n")
+cat("p-value:", res.f2$p.value, "\n\n")
+
+```
+
+##### Stats for pooled data: compare means between positions for either finger
+
+no significant differences
+
+```{r}
+
+stat_df <- subset(sdt_sum, position!="all" & finger!="both")
+
+# test normality of distribution of c_value differences between anatomical and crossed:
+diff_F1 <- with(subset(stat_df, finger=="F1"), c_value[position=="anat"] - c_value[position=="cross"])
+shapiro.test(diff_F1)
+
+diff_F2 <- with(subset(stat_df, finger=="F2"), c_value[position=="anat"] - c_value[position=="cross"])
+shapiro.test(diff_F2) 
+
+# t tests:
+res.f1 <- t.test(c_value ~ position, data=subset(stat_df, finger=="F1"), paired = TRUE, alternative = "two.sided")
+cat("t-test F1 (sum):\n")
+cat("Estimated mean difference (c):", res.f1$estimate, "\n")
+cat("p-value:", res.f1$p.value, "\n\n")
+
+res.f2 <-t.test(c_value ~ position, data=subset(stat_df, finger=="F2"), paired = TRUE, alternative = "two.sided")
+cat("t-test F2 (sum):\n")
+cat("Estimated mean difference (c):", res.f2$estimate, "\n")
+cat("p-value:", res.f2$p.value, "\n\n")
+
+```
+
+##### Repeated measures two-way ANOVA (finger x position) for within-subject averaged data
+
+```{r}
+palette <- c("#0072C1", "#EFC000")
+
+av_cvalue_fingers <- subset(sdt_av, position!="all" & finger!="both", select = c(ID, finger, position, c_value))
+
+# summary stats
+av_cvalue_fingers %>%
+  group_by(position, finger) %>% 
+  get_summary_stats(c_value, type = "mean_sd")
+
+# visualize
+ggboxplot(av_cvalue_fingers, 
+          x = "finger", y = "c_value",
+          color = "position", palette = palette
+  )
+
+# check outliers: ID29 (F1/anat), ID10 (F1/cross), ID20 (F1/cross), ID19 (F2/cross)
+av_cvalue_fingers %>%
+  group_by(position, finger) %>%
+  identify_outliers(c_value)
+
+# check normality: F1/cross not normal
+av_cvalue_fingers %>%
+  group_by(position, finger) %>%
+  shapiro_test(c_value)
+
+ggqqplot(av_cvalue_fingers, "c_value", ggtheme = theme_bw()) +
+  facet_grid(finger ~ position, labeller = "label_both")
+
+# check homoscedasticity
+ggplot(av_cvalue_fingers, aes(x = position, y = c_value, color = finger)) +
+  geom_point() +
+  labs(title = "Scatterplot of c by Finger and Position",
+       x = "Position",
+       y = "c") 
+
+leveneTest(c_value ~ finger * position, data = av_cvalue_fingers) # p > 0.05, assumption met
+
+# compute ANOVA
+res.aov <- anova_test(
+  data = df_cvalue_fingers, dv = c_value, wid = ID,
+  within = c(position, finger)
+  )
+```
+
+##### Repeated measures two-way ANOVA (finger x position) for pooled data
+
+```{r}
+palette <- c("#0072C1", "#EFC000")
+
+sum_cvalue_fingers <- subset(sdt_sum, position!="all" & finger!="both", select = c(ID, block, finger, position, c_value))
+
+# summary stats
+sum_cvalue_fingers %>%
+  group_by(position, finger) %>% 
+  get_summary_stats(c_value, type = "mean_sd")
+
+# visualize
+ggboxplot(sum_cvalue_fingers, 
+          x = "finger", y = "c_value",
+          color = "position", palette = palette
+  )
+
+# check outliers: ID7/block3/F1/anat), ID14/block5/F1/anat), ID1/block4F1/cross), ID10/block5/F1/cross, ID31/block2/F1/cross)
+sum_cvalue_fingers %>%
+  group_by(position, finger) %>%
+  identify_outliers(c_value)
+
+# check normality: only F1/cross is normal
+sum_cvalue_fingers %>%
+  group_by(position, finger) %>%
+  shapiro_test(c_value)
+
+ggqqplot(sum_cvalue_fingers, "c_value", ggtheme = theme_bw()) +
+  facet_grid(finger ~ position, labeller = "label_both")
+
+# check homoscedasticity: p > 0.05, assumption met
+ggplot(sum_cvalue_fingers, aes(x = position, y = c_value, color = finger)) +
+  geom_point() +
+  labs(title = "Scatterplot of c by Finger and Position",
+       x = "Position",
+       y = "c") 
+
+leveneTest(c_value ~ finger * position, data = sum_cvalue_fingers) 
+
+# compute ANOVA (assuming sample size is large enough)
+# combine ID and block into a single identifier column
+sum_cvalue_fingers$identifier <- paste(sum_cvalue_fingers$ID, sum_cvalue_fingers$block, sep = "_")
+
+res.aov <- anova_test(
+  data = sum_cvalue_fingers, dv = c_value, wid = identifier,
+  within = c(position, finger)
+  )
+get_anova_table(res.aov)
+
+```
+
+#### Plot F1 + F2 detection performance, d' and c across hand positions
+
+```{r}
+palette <- c("#F8766D", "#0072C1", "#EFC000")
+
+# av performance vs d' vs c
+
+perf_av <- ggplot(subset(df_det_av, finger=="both"), aes(x=finger, y=performance*100, fill=position))+
+  geom_boxplot(show.legend = FALSE)+
+  labs(title="detection performance (F1+F2)", x ="", y = "performance (%)")+
+  scale_x_discrete(breaks=c("both"),
+                   labels=c(""))+
+  theme_linedraw()+
+  theme(axis.text.x=element_text(size=12))+
+  scale_fill_manual(values=palette, labels=c("overall", "anatomical", "crossed"))
+
+d_av <- ggplot(subset(sdt_av, finger=="both"), aes(x=finger, y=d_prime, fill=position))+
+  geom_boxplot(show.legend = FALSE)+
+  labs(title="detection sensitivity d' (F1+F2))", x ="", y = "d'")+
+  scale_x_discrete(breaks=c("both"),
+                   labels=c(""))+
+  theme_linedraw()+
+  theme(axis.text.x=element_text(size=12))+
+  scale_fill_manual(values=palette, labels=c("overall", "anatomical", "crossed"))
+
+c_av <- ggplot(subset(sdt_av, finger=="both"), aes(x=finger, y=c_value, fill=position))+
+  geom_boxplot(show.legend = FALSE)+
+  labs(title="detection response bias c (F1+F2)", x ="", y = "c")+
+  scale_x_discrete(breaks=c("both"),
+                   labels=c(""))+
+  theme_linedraw()+
+  theme(axis.text.x=element_text(size=12))+
+  scale_fill_manual(values=palette, labels=c("overall", "anatomical", "crossed"))
+  
+
+
+# sum performance vs d' vs c
+
+perf_sum <- ggplot(subset(df_det_sum, finger=="both"), aes(x=finger, y=performance*100, fill=position))+
+  geom_boxplot(show.legend = FALSE)+
+  labs(title="", x ="", y = "performance (%)")+
+  scale_x_discrete(breaks=c("both"),
+                   labels=c(""))+
+  theme_linedraw()+
+  theme(axis.text.x=element_text(size=12))+
+  scale_fill_manual(values=palette, labels=c("overall", "anatomical", "crossed"))
+
+d_sum <- ggplot(subset(sdt_sum, finger=="both"), aes(x=finger, y=d_prime, fill=position))+
+  geom_boxplot(show.legend = FALSE)+
+  labs(title="", x ="", y = "d'")+
+  scale_x_discrete(breaks=c("both"),
+                   labels=c(""))+
+  theme_linedraw()+
+  theme(axis.text.x=element_text(size=12))+
+  scale_fill_manual(values=palette, labels=c("overall", "anatomical", "crossed"))
+
+c_sum <- ggplot(subset(sdt_sum, finger=="both"), aes(x=finger, y=c_value, fill=position))+
+  geom_boxplot()+
+  labs(title="", x ="", y = "c")+
+  scale_x_discrete(breaks=c("both"),
+                   labels=c(""))+
+  theme_linedraw()+
+  theme(axis.text.x=element_text(size=12))+
+  scale_fill_manual(values=palette, labels=c("overall", "anatomical", "crossed"))
+
+fig <- ggarrange(perf_av, perf_sum, d_av, d_sum, c_av, c_sum,
+                 labels = c("A", "B", "C", "D", "E", "F"),
+                 ncol = 2, nrow = 3)
+
+```
+
+##### Stats for within-subject averaged data 
+-mean performance 
+-no significant differences between hand positions
+
+```{r}
+
+### PERFORMANCE from 50 %
+##################################
+stat_df <- subset(df_det_av, finger=="both")
+
+shapiro.test(subset(stat_df, position=="all")$performance)
+shapiro.test(subset(stat_df, position=="anat")$performance)
+shapiro.test(subset(stat_df, position=="cross")$performance)
+
+t.test(subset(stat_df, position=="all")$performance, mu = 0.5, alternative = "greater") 
+wilcox.test(subset(stat_df, position=="anat")$performance, mu = 0.5, alternative = "greater") 
+t.test(subset(stat_df, position=="cross")$performance, mu = 0.5, alternative = "greater") 
+
+### PERFORMANCE between POSITIONS
+##################################
+stat_df <- subset(df_det_av, position!="all" & finger=="both")
+
+# test normality 
+diff <- with(stat_df, performance[position=="anat"] - performance[position=="cross"])
+shapiro.test(diff)
+
+# t test
+res.perf <- t.test(performance ~ position, data=stat_df, paired = TRUE, alternative = "two.sided")
+
+
+### D' between POSITIONS
+##################################
+stat_df <- subset(sdt_av, position!="all" & finger=="both")
+
+# test normality 
+diff <- with(stat_df, d_prime[position=="anat"] - d_prime[position=="cross"])
+shapiro.test(diff)
+
+# t test
+res.d <- t.test(d_prime ~ position, data=stat_df, paired = TRUE, alternative = "two.sided")
+
+
+### C between POSITIONS
+##################################
+# test normality 
+diff <- with(stat_df, c_value[position=="anat"] - c_value[position=="cross"])
+shapiro.test(diff)
+
+# t test
+res.c <- t.test(c_value ~ position, data=stat_df, paired = TRUE, alternative = "two.sided")
+
+
+cat("t-tests (av):\n")
+cat("Estimated mean difference (perf):", res.perf$estimate, "\n")
+cat("p-value:", res.perf$p.value, "\n\n")
+
+cat("Estimated mean difference (d'):", res.d$estimate, "\n")
+cat("p-value:", res.d$p.value, "\n\n")
+
+cat("Estimated mean difference (c):", res.c$estimate, "\n")
+cat("p-value:", res.c$p.value, "\n\n")
+```
+
+##### Stats for pooled data
+(sign. difference in performance between hand positions)
+
+```{r}
+
+### PERFORMANCE from 50 %
+##################################
+stat_df <- subset(df_det_sum, finger=="both")
+
+shapiro.test(subset(stat_df, position=="all")$performance)
+shapiro.test(subset(stat_df, position=="anat")$performance)
+shapiro.test(subset(stat_df, position=="cross")$performance)
+
+t.test(subset(stat_df, position=="all")$performance, mu = 0.5, alternative = "greater") 
+t.test(subset(stat_df, position=="anat")$performance, mu = 0.5, alternative = "greater") 
+t.test(subset(stat_df, position=="cross")$performance, mu = 0.5, alternative = "greater") 
+
+### PERFORMANCE between POSITIONS
+##################################
+stat_df <- subset(df_det_sum, position!="all" & finger=="both")
+
+# test normality 
+diff <- with(stat_df, performance[position=="anat"] - performance[position=="cross"])
+shapiro.test(diff)
+
+# t test
+res.perf <- t.test(performance ~ position, data=stat_df, paired = TRUE, alternative = "two.sided")
+
+
+### D' between POSITIONS
+##################################
+stat_df <- subset(sdt_sum, position!="all" & finger=="both")
+
+# test normality 
+diff <- with(stat_df, d_prime[position=="anat"] - d_prime[position=="cross"])
+shapiro.test(diff)
+
+# t test
+res.d <- t.test(d_prime ~ position, data=stat_df, paired = TRUE, alternative = "two.sided")
+
+
+### C between POSITIONS
+##################################
+# test normality 
+diff <- with(stat_df, c_value[position=="anat"] - c_value[position=="cross"])
+shapiro.test(diff)
+
+# t test
+res.c <- t.test(c_value ~ position, data=stat_df, paired = TRUE, alternative = "two.sided")
+
+
+cat("t-tests (sum):\n")
+cat("Estimated mean difference (perf):", res.perf$estimate, "\n")
+cat("p-value:", res.perf$p.value, "\n\n")
+
+cat("Estimated mean difference (d'):", res.d$estimate, "\n")
+cat("p-value:", res.d$p.value, "\n\n")
+
+cat("Estimated mean difference (c):", res.c$estimate, "\n")
+cat("p-value:", res.c$p.value, "\n\n")
+```

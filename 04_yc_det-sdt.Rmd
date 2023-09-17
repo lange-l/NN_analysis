@@ -1,0 +1,498 @@
+---
+title: "calculate_det-sdt-measures"
+author: "Lena Lange"
+date: "2023-04-04"
+output: html_document
+---
+
+Calculate detection sensitivity d' per block:
+d_prime = qnorm(hit_rate) - qnorm(fa_rate)
+
+Calculate detection response bias c per block:
+d_prime = (qnorm(hit_rate) + qnorm(fa_rate)) / 2
+
+#### Packages, Settings, Load Data
+
+```{r setup, include=FALSE}
+
+.libPaths("/data/pt_02438/lena/R/") # set path to save packages
+library(tidyverse)
+library(ggpubr)
+
+options(scipen = 999) # turn off e notation
+
+# set paths & load data frame
+data_dir <- '/data/pt_02438/numbtouch_neglect/young_controls/yc_behav/'
+plot_dir <- '/data/pt_02438/numbtouch_neglect/young_controls/yc_behav/plots/'
+
+behav_data <- paste(data_dir, 'yc_behav_excl.csv', sep = '')
+df <- read.table(behav_data, header = TRUE, sep = ",", fill = TRUE, stringsAsFactors = FALSE) 
+
+df <- subset(df, select=c(ID, block, block_type, stim, resp1, resp2, det, loca, resp1_t)) # keep only relevant columns
+
+```
+
+
+### Calculate Hit Rate, False Alarm Rate, d prime, c (position x finger)
+
+#### >> Overall (anatomical + crossed)
+
+```{r}
+# three data frames (per finger condition) with empty columns for 
+sdt_both <- df %>%
+  mutate(
+    d_prime = 'NaN',
+    c_value = 'NaN',
+    trials = 'NaN',
+    finger = 'both'
+  )
+
+sdt_F1 <- df %>%
+  mutate(
+    d_prime = 'NaN',
+    c_value = 'NaN',
+    trials = 'NaN',
+    finger = 'F1'
+  )
+
+sdt_F2 <- df %>%
+  mutate(
+    d_prime = 'NaN',
+    c_value = 'NaN',
+    trials = 'NaN',
+    finger = 'F2'
+  )
+
+for (i in unique(df$ID)) {
+  df_ID <- subset(df, ID==i) # iterate over IDs
+  
+  for (j in unique(df_ID$block)) {
+    df_block <- subset(df_ID, block==j) # iterate over blocks
+
+    ### F1 + F2
+    # count hits, misses, correct rejections, false alarms
+    hits <- sum(df_block$det %in% c("hitF1", "hitF2"))
+    misses <- sum(df_block$det %in% c("missF1", "missF2"))
+    correct_rejections <- sum(df_block$det=="CR")
+    false_alarms <- sum(df_block$det=="FA")
+    
+    # calculate hit rate & false alarm rate with loglinear correction
+    HR = (hits+0.5) / (hits+misses+1)
+    FAR = (false_alarms+0.5) / (false_alarms+correct_rejections+1)
+    
+    # calculate d_prime & c, write into data frame for both fingers
+    sdt_both <- sdt_both %>%
+      mutate(
+        d_prime = ifelse(((ID==i) & (block==j)), 
+                         (qnorm(HR) - qnorm(FAR)), 
+                         d_prime),
+        
+        c_value = ifelse(((ID==i) & (block==j)), 
+                         (-0.5*(qnorm(HR) + qnorm(FAR))), 
+                         c_value),
+        
+        trials = ifelse(((ID == i) & (block == j)), 
+                        nrow(df_block), 
+                        trials)
+      )
+  
+    ### F1
+    # count hits, misses, correct rejections, false alarms
+    hits <- sum(df_block$det=="hitF1")
+    misses <- sum(df_block$det=="missF1")
+    correct_rejections <- sum(df_block$det=="CR")
+    false_alarms <- sum(df_block$det=="FA")
+    
+    # calculate hit rate & false alarm rate with loglinear correction
+    HR = (hits+0.5) / (hits+misses+1)
+    FAR = (false_alarms+0.5) / (false_alarms+correct_rejections+1)
+    
+    # calculate d_prime & c, write into data frame for F1
+    sdt_F1 <- sdt_F1 %>%
+      mutate(
+        d_prime = ifelse(((ID==i) & (block==j)), 
+                         (qnorm(HR) - qnorm(FAR)), 
+                         d_prime),
+        
+        c_value = ifelse(((ID==i) & (block==j)), 
+                         (-0.5*(qnorm(HR) + qnorm(FAR))), 
+                         c_value),
+        
+        trials = ifelse(((ID == i) & (block == j)), 
+                        sum(df_block$stim!=2), 
+                        trials)
+      )
+
+    ### F2
+    # count hits, misses, correct rejections, false alarms
+    hits <- sum(df_block$det=="hitF2")
+    misses <- sum(df_block$det=="missF2")
+    correct_rejections <- sum(df_block$det=="CR")
+    false_alarms <- sum(df_block$det=="FA")
+    
+    # calculate hit rate & false alarm rate with loglinear correction
+    HR = (hits+0.5) / (hits+misses+1)
+    FAR = (false_alarms+0.5) / (false_alarms+correct_rejections+1)
+    
+    # calculate d_prime & c, write into data frame for F1
+    sdt_F2 <- sdt_F2 %>%
+      mutate(
+        d_prime = ifelse(((ID==i) & (block==j)), 
+                         (qnorm(HR) - qnorm(FAR)), 
+                         d_prime),
+        
+        c_value = ifelse(((ID==i) & (block==j)), 
+                         (-0.5*(qnorm(HR) + qnorm(FAR))), 
+                         c_value),
+        
+        trials = ifelse(((ID == i) & (block == j)), 
+                        sum(df_block$stim!=1), 
+                        trials)
+      )
+ }}
+
+
+# Bind 3 data frames together, set column types:
+df_overall <- rbind(sdt_both, sdt_F1, sdt_F2) %>%
+  mutate(
+    d_prime = as.numeric(d_prime),
+    c_value = as.numeric(c_value),
+    trials = as.numeric(trials)
+    )
+
+# Summarise, add "position" column
+df_overall_sum <- df_overall%>%
+  group_by(ID, block, finger, d_prime, c_value, trials) %>%
+  summarise() %>%
+  mutate(position="all")
+
+# Within-subject average of d_prime and c (per finger):
+df_overall_av <- df_overall_sum %>%
+  group_by(ID, finger) %>%
+  summarise(d_prime = mean(d_prime),
+            c_value = mean(c_value),
+            trials = sum(trials)) %>%
+  mutate(position="all")
+
+```
+
+#### >> Anatomical only
+
+```{r}
+df_a <- subset(df, block_type==1)
+
+sdt_both <- df %>%
+  mutate(
+    d_prime = 'NaN',
+    c_value = 'NaN',
+    trials = 'NaN',
+    finger = 'both'
+  )
+
+sdt_F1 <- df %>%
+  mutate(
+    d_prime = 'NaN',
+    c_value = 'NaN',
+    trials = 'NaN',
+    finger = 'F1'
+  )
+
+sdt_F2 <- df %>%
+  mutate(
+    d_prime = 'NaN',
+    c_value = 'NaN',
+    trials = 'NaN',
+    finger = 'F2'
+  )
+
+for (i in unique(df_a$ID)) {
+  df_ID <- subset(df_a, ID==i) # iterate over IDs
+  
+  for (j in unique(df_ID$block)) {
+    df_block <- subset(df_ID, block==j) # iterate over blocks
+
+    ### F1 + F2
+    # count hits, misses, correct rejections, false alarms
+    hits <- sum(df_block$det %in% c("hitF1", "hitF2"))
+    misses <- sum(df_block$det %in% c("missF1", "missF2"))
+    correct_rejections <- sum(df_block$det=="CR")
+    false_alarms <- sum(df_block$det=="FA")
+    
+    # calculate hit rate & false alarm rate with loglinear correction
+    HR = (hits+0.5) / (hits+misses+1)
+    FAR = (false_alarms+0.5) / (false_alarms+correct_rejections+1)
+    
+    # calculate d_prime & c, write into data frame for both fingers
+    sdt_both <- sdt_both %>%
+      mutate(
+        d_prime = ifelse(((ID==i) & (block==j)), 
+                         (qnorm(HR) - qnorm(FAR)), 
+                         d_prime),
+        
+        c_value = ifelse(((ID==i) & (block==j)), 
+                         (-0.5*(qnorm(HR) + qnorm(FAR))), 
+                         c_value),
+        
+        trials = ifelse(((ID == i) & (block == j)), 
+                        nrow(df_block), 
+                        trials)
+      )
+  
+    ### F1
+    # count hits, misses, correct rejections, false alarms
+    hits <- sum(df_block$det=="hitF1")
+    misses <- sum(df_block$det=="missF1")
+    correct_rejections <- sum(df_block$det=="CR")
+    false_alarms <- sum(df_block$det=="FA")
+    
+    # calculate hit rate & false alarm rate with loglinear correction
+    HR = (hits+0.5) / (hits+misses+1)
+    FAR = (false_alarms+0.5) / (false_alarms+correct_rejections+1)
+    
+    # calculate d_prime & c, write into data frame for F1
+    sdt_F1 <- sdt_F1 %>%
+      mutate(
+        d_prime = ifelse(((ID==i) & (block==j)), 
+                         (qnorm(HR) - qnorm(FAR)), 
+                         d_prime),
+        
+        c_value = ifelse(((ID==i) & (block==j)), 
+                         (-0.5*(qnorm(HR) + qnorm(FAR))), 
+                         c_value),
+        
+        trials = ifelse(((ID == i) & (block == j)), 
+                        sum(df_block$stim!=2), 
+                        trials)
+      )
+
+    ### F2
+    # count hits, misses, correct rejections, false alarms
+    hits <- sum(df_block$det=="hitF2")
+    misses <- sum(df_block$det=="missF2")
+    correct_rejections <- sum(df_block$det=="CR")
+    false_alarms <- sum(df_block$det=="FA")
+    
+    # calculate hit rate & false alarm rate with loglinear correction
+    HR = (hits+0.5) / (hits+misses+1)
+    FAR = (false_alarms+0.5) / (false_alarms+correct_rejections+1)
+    
+    # calculate d_prime & c, write into data frame for F1
+    sdt_F2 <- sdt_F2 %>%
+      mutate(
+        d_prime = ifelse(((ID==i) & (block==j)), 
+                         (qnorm(HR) - qnorm(FAR)), 
+                         d_prime),
+        
+        c_value = ifelse(((ID==i) & (block==j)), 
+                         (-0.5*(qnorm(HR) + qnorm(FAR))), 
+                         c_value),
+        
+        trials = ifelse(((ID == i) & (block == j)), 
+                        sum(df_block$stim!=1), 
+                        trials)
+      )
+ }}
+
+
+# Bind 3 data frames together, set column types:
+df_anat <- rbind(sdt_both, sdt_F1, sdt_F2) %>%
+  mutate(
+    d_prime = as.numeric(d_prime),
+    c_value = as.numeric(c_value),
+    trials = as.numeric(trials))
+
+
+# Summarise, add "position" column
+df_anat_sum <- df_anat%>%
+  group_by(ID, block, finger, d_prime, c_value, trials) %>%
+  summarise() %>%
+  mutate(position="anat")
+
+# Within-subject average of d_prime and c (per finger):
+df_anat_av <- df_anat_sum %>%
+  group_by(ID, finger) %>%
+  summarise(d_prime = mean(d_prime),
+            c_value = mean(c_value),
+            trials = sum(trials)) %>%
+  mutate(position="anat")
+
+```
+
+#### >> Crossed only
+
+```{r}
+df_c <- subset(df, block_type==2)
+
+sdt_both <- df %>%
+  mutate(
+    d_prime = 'NaN',
+    c_value = 'NaN',
+    trials = 'NaN',
+    finger = 'both'
+  )
+
+sdt_F1 <- df %>%
+  mutate(
+    d_prime = 'NaN',
+    c_value = 'NaN',
+    trials = 'NaN',
+    finger = 'F1'
+  )
+
+sdt_F2 <- df %>%
+  mutate(
+    d_prime = 'NaN',
+    c_value = 'NaN',
+    trials = 'NaN',
+    finger = 'F2'
+  )
+
+for (i in unique(df_c$ID)) {
+  df_ID <- subset(df_c, ID==i) # iterate over IDs
+  
+  for (j in unique(df_ID$block)) {
+    df_block <- subset(df_ID, block==j) # iterate over blocks
+
+    ### F1 + F2
+    # count hits, misses, correct rejections, false alarms
+    hits <- sum(df_block$det %in% c("hitF1", "hitF2"))
+    misses <- sum(df_block$det %in% c("missF1", "missF2"))
+    correct_rejections <- sum(df_block$det=="CR")
+    false_alarms <- sum(df_block$det=="FA")
+    
+    # calculate hit rate & false alarm rate with loglinear correction
+    HR = (hits+0.5) / (hits+misses+1)
+    FAR = (false_alarms+0.5) / (false_alarms+correct_rejections+1)
+    
+    # calculate d_prime & c, write into data frame for both fingers
+    sdt_both <- sdt_both %>%
+      mutate(
+        d_prime = ifelse(((ID==i) & (block==j)), 
+                         (qnorm(HR) - qnorm(FAR)), 
+                         d_prime),
+        
+        c_value = ifelse(((ID==i) & (block==j)), 
+                         (-0.5*(qnorm(HR) + qnorm(FAR))), 
+                         c_value),
+        
+        trials = ifelse(((ID == i) & (block == j)), 
+                        nrow(df_block), 
+                        trials)
+      )
+  
+    ### F1
+    # count hits, misses, correct rejections, false alarms
+    hits <- sum(df_block$det=="hitF1")
+    misses <- sum(df_block$det=="missF1")
+    correct_rejections <- sum(df_block$det=="CR")
+    false_alarms <- sum(df_block$det=="FA")
+    
+    # calculate hit rate & false alarm rate with loglinear correction
+    HR = (hits+0.5) / (hits+misses+1)
+    FAR = (false_alarms+0.5) / (false_alarms+correct_rejections+1)
+    
+    # calculate d_prime & c, write into data frame for F1
+    sdt_F1 <- sdt_F1 %>%
+      mutate(
+        d_prime = ifelse(((ID==i) & (block==j)), 
+                         (qnorm(HR) - qnorm(FAR)), 
+                         d_prime),
+        
+        c_value = ifelse(((ID==i) & (block==j)), 
+                         (-0.5*(qnorm(HR) + qnorm(FAR))), 
+                         c_value),
+        
+        trials = ifelse(((ID == i) & (block == j)), 
+                        sum(df_block$stim!=2), 
+                        trials)
+      )
+
+    ### F2
+    # count hits, misses, correct rejections, false alarms
+    hits <- sum(df_block$det=="hitF2")
+    misses <- sum(df_block$det=="missF2")
+    correct_rejections <- sum(df_block$det=="CR")
+    false_alarms <- sum(df_block$det=="FA")
+    
+    # calculate hit rate & false alarm rate with loglinear correction
+    HR = (hits+0.5) / (hits+misses+1)
+    FAR = (false_alarms+0.5) / (false_alarms+correct_rejections+1)
+    
+    # calculate d_prime & c, write into data frame for F1
+    sdt_F2 <- sdt_F2 %>%
+      mutate(
+        d_prime = ifelse(((ID==i) & (block==j)), 
+                         (qnorm(HR) - qnorm(FAR)), 
+                         d_prime),
+        
+        c_value = ifelse(((ID==i) & (block==j)), 
+                         (-0.5*(qnorm(HR) + qnorm(FAR))), 
+                         c_value),
+        
+        trials = ifelse(((ID == i) & (block == j)), 
+                        sum(df_block$stim!=1), 
+                        trials)
+      )
+ }}
+
+
+# Bind 3 data frames together, set column types:
+df_cross <- rbind(sdt_both, sdt_F1, sdt_F2) %>%
+  mutate(
+    d_prime = as.numeric(d_prime),
+    c_value = as.numeric(c_value),
+    trials = as.numeric(trials))
+
+
+# Summarise, add "position" column
+df_cross_sum <- df_cross%>%
+  group_by(ID, block, finger, d_prime, c_value, trials) %>%
+  summarise() %>%
+  mutate(position="cross")
+
+# Within-subject average of d_prime and c (per finger):
+df_cross_av <- df_cross_sum %>%
+  group_by(ID, finger) %>%
+  summarise(d_prime = mean(d_prime),
+            c_value = mean(c_value),
+            trials = sum(trials)) %>%
+  mutate(position="cross")
+
+```
+
+## Bind position DFs together & save 
+
+```{r}
+df_sum <- rbind(df_overall_sum, df_anat_sum, df_cross_sum) %>%
+  select(ID, block, position, finger, d_prime, c_value, trials)
+df_av <- rbind(df_overall_av, df_anat_av, df_cross_av) %>%
+  select(ID, position, finger, d_prime, c_value, trials)
+
+fname <- file.path(data_dir, "yc_sdt-yn_sum.csv")
+write.csv(df_sum, fname, row.names = FALSE)
+
+fname <- file.path(data_dir, "yc_sdt-yn_av.csv")
+write.csv(df_av, fname, row.names = FALSE)
+
+
+# # weights = n_trials_per_participant * (n_participants/n_trials_all_participants)
+# sdt_av <- sdt_av %>%
+#   group_by(position, finger) %>%
+#   mutate(
+#     weight = trials * (length(unique(df$ID))/sum(trials)),
+#     weight = as.numeric(weight),
+#     position = as.factor(position),
+#     finger = as.factor(finger)) %>%
+#   select(ID, position, finger, HR, FAR, d_prime, c_value, trials, weight)
+# 
+# sdt_sum <- sdt_sum %>%
+#   group_by(block, position, finger) %>%
+#   mutate(
+#     weight = trials * (length(unique(df$ID))/sum(trials)),
+#     weight = as.numeric(weight),
+#     position = as.factor(position),
+#     finger = as.factor(finger)) %>%
+#     select(ID, block, position, finger, HR, FAR, d_prime, c_value, trials, weight)
+
+  
+```
